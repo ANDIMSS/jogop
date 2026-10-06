@@ -49,6 +49,8 @@ export const DEFAULT_CONFIG = {
     rockSmall: 40,
     rockLarge: 150,
     mine: 120,
+    kestrel: 220,
+    shard: 140,
     chunk: 60,
     graze: 10,
     grinder: 4000,

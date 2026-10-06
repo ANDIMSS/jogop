@@ -47,3 +47,51 @@ export const chisel = (x: number, y: number, fire: FirePattern, hold = 4.5, drop
 /** A gunship that parks behind the lane and cycles its pattern. */
 export const lantern = (x: number, y: number, fire: FirePattern = 'spiral', hold = 7) => (d: Director) =>
   d.spawn({ kind: 'lantern', motion: 'hold', p0: [x, y + 32, -125], p1: [x, y, -56], p2: [x, y - 40, -95], hold, fire, fireDelay: 0.2, drop: true })
+
+/** KESTREL attack craft: fast darts that dive at the lane, fire a burst and break away. */
+export const kestrels = (count = 4, fire: FirePattern = 'burst', y = 0) => (b: B) =>
+  b.every(0.46, count, (d, i) => {
+    const side = i % 2 ? 1 : -1
+    d.spawn({
+      kind: 'kestrel', motion: 'swoop',
+      p0: [side * 30, y + (i % 3) * 2.6 - 1.5, -124],
+      p1: [side * 4.5, y - 1 + (i % 2) * 1.4, -46],
+      p2: [-side * 36, y + 5 - (i % 3) * 2, -30],
+      duration: 5.4, fire, fireDelay: 1.1 + i * 0.22, heat: 1.05,
+    })
+  })
+
+/** An arc of attack craft that converges on the lane from above, like a diving wing. */
+export const kestrelDive = (count = 5, y = 6) => (b: B) =>
+  b.every(0.32, count, (d, i) => {
+    const x = -10 + i * 5
+    d.spawn({
+      kind: 'kestrel', motion: 'swoop',
+      p0: [x * 1.6, y + 14 - i * 1.2, -140],
+      p1: [x * 0.55, y - 2, -48],
+      p2: [x * 2.2, y - 12 + i, -18],
+      duration: 5.0 + i * 0.06, fire: i % 2 ? 'burst' : 'aimed', fireDelay: 1.0 + i * 0.3, heat: 1.0,
+    })
+  })
+
+/** A slow ribbon of prism crystals; each one cleaves in two when it breaks. */
+export const shards = (count = 4, fire: FirePattern = 'aimed', side = 1, y = 0) => (b: B) =>
+  b.every(0.62, count, (d, i) =>
+    d.spawn({
+      kind: 'shard', motion: 'swoop',
+      p0: [side * 33, y + (i % 3) * 2.4 - 2, -88],
+      p1: [side * 4.5, y - 1 + (i % 2) * 1.6, -48],
+      p2: [-side * 30, y + 4 + (i % 3) * 1.4, -26],
+      duration: 8.2, fire, fireDelay: 2.4 + Math.random() * 1.2, heat: 0.8,
+    }),
+  )
+
+/** Crystals that drift up the lane with the debris instead of crossing it. */
+export const shardDrift = (count = 4) => (b: B) =>
+  b.every(0.5, count, (d, i) =>
+    d.spawn({
+      kind: 'shard', motion: 'drift',
+      p0: [-6 + i * 3.4, -2.5 + (i % 2) * 2.4, -190],
+      vel: [0, 0, 19], fire: 'aimed', fireDelay: 3.2 + Math.random(), heat: 0.75, scale: 1.1,
+    }),
+  )

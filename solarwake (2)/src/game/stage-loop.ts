@@ -1,7 +1,7 @@
 import { TimelineBuilder, type Timeline } from '../engine/timeline'
 import type { Director } from './director'
 import type { FirePattern } from './enemies'
-import type { B } from './formations'
+import { kestrels, shardDrift, shards, type B } from './formations'
 
 /**
  * Stage 3 "Continuous Loop". A meditation piece: one glass ribbon undulating in zero gravity over
@@ -77,11 +77,13 @@ export function buildLoopStage(): Timeline<Director> {
       d.setMusic('loopTide')
       d.cue('cue.drift')
     })
-    .use(drift(-1))
+    .use(drift(-1, 'none', 6))
+    .wait(3)
+    .use(drift(1, 'aimed', 5))
+    .wait(4)
+    .use(shardDrift(3))
     .wait(5)
-    .use(drift(1, 'aimed', 4))
-    .wait(7)
-    .gate(d => d.hostiles() === 0, 15)
+    .gate(d => d.hostiles() === 0, 16)
     .call(d => d.setMusic('loop'))
     .wait(8)
     .call(d => {
@@ -89,18 +91,37 @@ export function buildLoopStage(): Timeline<Director> {
       d.cue('cue.sentinel')
     })
     .call(sentinel(-12, 3))
-    .wait(6)
-    .use(threads(4))
-    .wait(6)
+    .call(sentinel(13, -2))
+    .wait(5)
+    .use(threads(6))
+    .wait(4)
+    .use(drift(-1, 'fan3', 4))
+    .wait(5)
     .gate(d => d.hostiles() === 0, 22)
     .call(d => d.setMusic('loop'))
     .wait(6)
-    .call(d => d.setMusic('loopTide'))
+    .call(d => {
+      d.setMusic('loopTide')
+      d.cue('cue.shard')
+    })
     .call(chiselPair())
-    .wait(11)
+    .use(shards(4, 'aimed', -1, 2))
+    .wait(4)
+    .use(shardDrift(4))
+    .wait(7)
     .use(drift(1, 'burst', 4))
+    .use(kestrels(3, 'burst', -4))
     .wait(8)
-    .gate(d => d.hostiles() === 0, 18)
+    .gate(d => d.hostiles() === 0, 20)
+    .call(d => d.setMusic('loop'))
+    .wait(5)
+    // A last wing crosses in silence, then the void gets its long rest again.
+    .call(d => d.setMusic('loopTide'))
+    .use(shards(3, 'none', 1, -3))
+    .wait(6)
+    .use(kestrels(4, 'aimed', 5))
+    .wait(9)
+    .gate(d => d.hostiles() === 0, 16)
     .call(d => d.setMusic('loop'))
     .wait(5)
     // ...and around again.

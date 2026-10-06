@@ -3,9 +3,9 @@ import type { RAPIER } from '../engine/physics'
 import { InstancedBatch } from '../engine/pool'
 import { GROUP_TARGET, type Arena } from './arena'
 import { CONFIG } from './config'
-import { buildCell, buildChisel, buildLantern, buildMine, buildMite, buildOreChunk, buildRock, type ModelParts } from './models'
+import { buildCell, buildChisel, buildKestrel, buildLantern, buildMine, buildMite, buildOreChunk, buildRock, buildShard, type ModelParts } from './models'
 
-export type EnemyKind = 'mite' | 'chisel' | 'lantern' | 'rock' | 'bigrock' | 'mine' | 'chunk' | 'cell'
+export type EnemyKind = 'mite' | 'chisel' | 'lantern' | 'kestrel' | 'shard' | 'rock' | 'bigrock' | 'mine' | 'chunk' | 'cell'
 export type Motion = 'swoop' | 'hold' | 'drift' | 'thrown'
 export type FirePattern = 'none' | 'aimed' | 'burst' | 'fan3' | 'fan5' | 'ring' | 'spiral'
 type V3 = [number, number, number]
@@ -36,11 +36,22 @@ const STATS: Record<EnemyKind, Stats> = {
   mite: { hp: 2, radius: 1.0, score: CONFIG.score.mite, primary: '#ff3d8e', secondary: '#ffb347', debris: '#3b3656', boom: 0.9 },
   chisel: { hp: 9, radius: 1.5, score: CONFIG.score.chisel, primary: '#ff8a2a', secondary: '#ffe08a', debris: '#e8b23a', boom: 1.4 },
   lantern: { hp: 34, radius: 2.4, score: CONFIG.score.lantern, primary: '#ff6a2a', secondary: '#ff3d8e', debris: '#e8b23a', boom: 2.3 },
+  kestrel: { hp: 5, radius: 1.15, score: CONFIG.score.kestrel, primary: '#ff8a2a', secondary: '#7ff6ff', debris: '#555a78', boom: 1.1 },
+  shard: { hp: 3, radius: 1.3, score: CONFIG.score.shard, primary: '#3fd0ff', secondary: '#7ff6ff', debris: '#bdb6a6', boom: 1.0 },
   rock: { hp: 3, radius: 1.35, score: CONFIG.score.rockSmall, primary: '#d9a27a', secondary: '#8f7a88', debris: '#6d5a6e', boom: 0.9 },
   bigrock: { hp: 14, radius: 3.3, score: CONFIG.score.rockLarge, primary: '#e0b08a', secondary: '#8f7a88', debris: '#6d5a6e', boom: 2.2 },
   mine: { hp: 2, radius: 1.1, score: CONFIG.score.mine, primary: '#ff3344', secondary: '#ffd35c', debris: '#2c2f45', boom: 1.3 },
   chunk: { hp: 5, radius: 1.7, score: CONFIG.score.chunk, primary: '#ff8a2a', secondary: '#ffd35c', debris: '#5a4250', boom: 1.4 },
   cell: { hp: 1, radius: 0.9, score: 0, primary: '#9dff5c', secondary: '#ffffff', debris: '#ffffff', boom: 0.5 },
+}
+
+/**
+ * How a broken prism crystal cleaves: a full-size shard leaves two fragments behind (one
+ * generation only), anything smaller just dies.
+ */
+export const SHARD_SPLIT_MIN = 0.9
+export function shardSplit(scale: number): number {
+  return scale >= SHARD_SPLIT_MIN ? scale * 0.6 : 0
 }
 
 export type Enemy = {
@@ -111,14 +122,16 @@ export class Enemies {
     rock.glow.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(9), 3))
     rock.glow.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(9), 3))
     this.batches = {
-      mite: make(buildMite(), 90),
-      chisel: make(buildChisel(), 30),
-      lantern: make(buildLantern(), 10),
-      rock: make(rock, 60),
-      bigrock: make({ body: buildRock(3, 1, '#7a6358'), glow: rock.glow.clone() }, 24),
-      mine: make(buildMine(), 30),
-      chunk: make(buildOreChunk(), 24),
-      cell: make(buildCell(), 12),
+      mite: make(buildMite(), 130),
+      chisel: make(buildChisel(), 44),
+      lantern: make(buildLantern(), 18),
+      kestrel: make(buildKestrel(), 40),
+      shard: make(buildShard(), 64),
+      rock: make(rock, 96),
+      bigrock: make({ body: buildRock(3, 1, '#7a6358'), glow: rock.glow.clone() }, 32),
+      mine: make(buildMine(), 48),
+      chunk: make(buildOreChunk(), 32),
+      cell: make(buildCell(), 16),
     }
   }
 
@@ -139,7 +152,9 @@ export class Enemies {
 
   get hostileCount(): number {
     let n = 0
-    for (const e of this.list) if (e.kind === 'mite' || e.kind === 'chisel' || e.kind === 'lantern') n += 1
+    for (const e of this.list) {
+      if (e.kind === 'mite' || e.kind === 'chisel' || e.kind === 'lantern' || e.kind === 'kestrel' || e.kind === 'shard') n += 1
+    }
     return n
   }
 
@@ -177,7 +192,8 @@ export class Enemies {
     e.age = 0
     e.drop = spec.drop ?? false
     e.quat.random()
-    e.spin.setFromAxisAngle(this.v.randomDirection(), (spec.kind === 'rock' || spec.kind === 'bigrock' ? 0.6 + Math.random() * 1.4 : spec.kind === 'chunk' ? 4 : 1.2) / 60)
+    const spinBase = spec.kind === 'rock' || spec.kind === 'bigrock' ? 0.6 + Math.random() * 1.4 : spec.kind === 'chunk' ? 4 : spec.kind === 'shard' ? 0.85 : 1.2
+    e.spin.setFromAxisAngle(this.v.randomDirection(), spinBase / 60)
     const hasCollider = spec.kind !== 'cell'
     e.collider.setEnabled(hasCollider)
     if (hasCollider) {
@@ -242,13 +258,34 @@ export class Enemies {
     } else if (e.kind === 'chisel') {
       a.impact.hitStop(0.035)
       a.impact.shake(0.14)
-    } else if (e.kind === 'mite' || e.kind === 'mine') {
+    } else if (e.kind === 'kestrel') {
+      a.impact.hitStop(0.03)
+      a.impact.shake(0.12)
+    } else if (e.kind === 'mite' || e.kind === 'mine' || e.kind === 'shard') {
       a.impact.hitStop(0.018)
       a.impact.shake(0.06)
     } else a.impact.shake(big ? 0.2 : 0.05)
     if (e.kind === 'mine') {
       // Mines burst into a small ring when shot, rewarding a timely kill but keeping pressure.
       a.bullets.ring(e.pos, a.player, 16, 8, 6, Math.random() * 6, { color: 'red', radius: 0.36 })
+    }
+    if (e.kind === 'shard') {
+      // Crystals cleave: a big shard breaks into two smaller ones that keep drifting in.
+      a.bullets.ring(e.pos, a.player, 10, 3, 5, Math.random() * 6, { color: 'cyan', radius: 0.3 })
+      const child = shardSplit(e.scale)
+      if (child > 0) {
+        for (const side of [-1, 1]) {
+          this.spawn({
+            kind: 'shard', motion: e.motion, duration: e.duration, fire: e.fire === 'none' ? 'none' : 'aimed', fireDelay: 1.6 + Math.random() * 0.8, heat: 0.75,
+            p0: [e.pos.x + side * e.radius, e.pos.y + side * 0.6, e.pos.z],
+            p1: [e.p1.x + side * e.radius, e.p1.y + side * 0.6, e.p1.z],
+            p2: [e.p2.x - side * e.radius * 1.5, e.p2.y + side * 1.2, e.p2.z - 6],
+            // Drift-spawned shards need their own push, or a fragment would hang in the lane.
+            vel: [e.vel.x + side * 3.4, e.vel.y + side * 1.6, e.vel.z],
+            scale: child,
+          })
+        }
+      }
     }
     if (e.kind === 'bigrock') {
       for (let i = 0; i < 3; i += 1) {
@@ -350,7 +387,7 @@ export class Enemies {
         }
       }
       // Orientation: combat drones face the ship and bank with lateral motion.
-      if (e.kind === 'mite' || e.kind === 'chisel' || e.kind === 'lantern') {
+      if (e.kind === 'mite' || e.kind === 'chisel' || e.kind === 'lantern' || e.kind === 'kestrel') {
         this.v.subVectors(player, e.pos)
         this.v.z = Math.abs(this.v.z) + 20
         this.v.normalize()

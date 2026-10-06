@@ -1,6 +1,6 @@
 import { Eases, TimelineBuilder, type Timeline } from '../engine/timeline'
 import type { Director } from './director'
-import { chisel, lantern, overtake, snake, spiral, vee, type B } from './formations'
+import { chisel, kestrelDive, kestrels, lantern, overtake, snake, spiral, vee, type B } from './formations'
 
 /**
  * Stage 2 "Earth Orbit". Same engine, different planet: the whole backdrop is swapped through the
@@ -20,6 +20,19 @@ const dragnet = (count = 5, gap = 0) => (b: B) =>
   b.every(0.34, count, (d, i) => {
     const side = i % 2 ? 1 : -1
     d.spawn({ kind: 'mine', motion: 'drift', p0: [side * (5 - i) + gap, side * (2 + i * 0.7), -150], vel: [0, 0, 26], duration: 6 })
+  })
+
+/** A pack of attack craft crossing the lane low, then climbing away over the top. */
+const lowCrossing = () => (b: B) =>
+  b.every(0.3, 4, (d, i) => {
+    const side = i % 2 ? 1 : -1
+    d.spawn({
+      kind: 'kestrel', motion: 'swoop',
+      p0: [side * 26, -9 + (i % 2) * 3, -118],
+      p1: [side * 3, -5 + (i % 2) * 2, -52],
+      p2: [-side * 30, 6, -26],
+      duration: 5.2, fire: 'burst', fireDelay: 0.9 + i * 0.25, heat: 1.05,
+    })
   })
 
 /** Junk thrown from the planet below: debris that climbs up through the lane. */
@@ -49,18 +62,24 @@ export function buildOrbitStage(): Timeline<Director> {
   b.label('wake')
     .call(d => d.cue('cue.orbit'))
     .use(snake(-1))
-    .wait(2.0)
+    .wait(1.6)
     .use(snake(1))
-    .wait(2.6)
+    .wait(2.0)
     .use(vee(0, 2, 'aimed'))
-    .wait(3.2)
+    .use(kestrels(2, 'burst', 5))
+    .wait(2.8)
     .call(platforms('burst'))
-    .wait(3.4)
+    .wait(2.4)
+    .use(kestrelDive(4, 7))
+    .wait(1.6)
     .call(lantern(0, 6, 'fan3', 5))
+    .call(chisel(-13, -4, 'fan3'))
     .wait(1.2)
     .use(spiral('aimed'))
-    .wait(3.0)
-    .gate(d => d.hostiles() === 0, 9)
+    .wait(2.6)
+    .use(snake(-1, 'aimed', 5, -4))
+    .wait(2.4)
+    .gate(d => d.hostiles() === 0, 12)
     .wait(0.8)
 
   b.label('kessler')
@@ -71,20 +90,30 @@ export function buildOrbitStage(): Timeline<Director> {
     })
     .wait(1.2)
   const junkStart = b.time
-  b.every(0.24, 44, (d, i) => {
+  b.every(0.2, 52, (d, i) => {
     d.rock(i % 8 === 3, i % 5 === 0 ? 'player' : 'random')
     if (i % 2) d.rock(false)
-    if (i % 10 === 4) d.mine()
+    if (i % 7 === 5) d.rock(true, 'random')
+    if (i % 8 === 4) d.mine()
   })
   const junkEnd = b.time
   // Harmless drift formations layered over the field: free chain fuel.
-  b.at(junkStart + 4)
+  b.at(junkStart + 3)
     .use(snake(-1, 'none', 6, 6))
-    .wait(3.2)
+    .wait(2.4)
+    .use(snake(1, 'aimed', 6, -6))
+    .wait(2.0)
     .use(vee(11, -2, 'none'))
+    .use(vee(-11, 5, 'aimed'))
+    .at(junkStart + 8.4)
+    .use(kestrels(4, 'burst', 0))
+    .at(junkStart + 10.6)
+    .use(kestrelDive(4, -6))
+    .at(junkEnd + 0.8)
+    .use(spiral('none'))
     .at(junkEnd + 1.4)
     .call(d => d.setRail('cruise'))
-    .wait(2.0)
+    .wait(2.4)
 
   b.label('skip')
     .call(d => {
@@ -98,13 +127,19 @@ export function buildOrbitStage(): Timeline<Director> {
   const skipStart = b.time
   b.tween(6.4, (d, t) => d.atmosphere(1 - t * 0.55), { ease: Eases.inQuad, advance: true })
     .tween(2.6, (d, t) => d.atmosphere(0.45 * (1 - t)), { ease: Eases.outQuad, advance: true })
-  b.at(skipStart + 1.0)
+  b.at(skipStart + 0.8)
     .use(spiral('none'))
-    .at(skipStart + 3.8)
+    .at(skipStart + 2.4)
+    .use(kestrels(3, 'aimed', 3))
+    .at(skipStart + 3.6)
     .call(chisel(-8, 4, 'fan3'))
     .call(chisel(8, -3, 'fan3'))
+    .call(chisel(0, 8, 'ring'))
     .at(skipStart + 4.6)
     .call(lantern(-11, 2, 'spiral', 5))
+    .call(lantern(11, -4, 'fan5', 5))
+    .at(skipStart + 6.4)
+    .use(kestrelDive(5, 4))
     .at(skipStart + 9.0)
     .call(d => {
       d.setRail('cruise')
@@ -115,27 +150,33 @@ export function buildOrbitStage(): Timeline<Director> {
 
   b.label('blockade')
     .call(platforms('ring'))
-    .wait(3.0)
+    .wait(2.4)
     .call(lantern(0, 1, 'ring', 7))
-    .use(dragnet(4, 3))
-    .wait(3.4)
-    .use(overtake('burst', 8))
-    .wait(3.2)
+    .use(dragnet(5, 3))
+    .wait(2.8)
+    .use(overtake('burst', 9))
+    .use(kestrels(3, 'burst', -6))
+    .wait(2.8)
     .use(spiral('aimed'))
-    .use(updraft(5))
-    .wait(3.6)
+    .use(updraft(6))
+    .wait(3.0)
     .call(lantern(-10, 4, 'spiral', 6))
     .call(lantern(10, -3, 'fan5', 6))
-    .wait(3.0)
+    .call(lantern(0, -8, 'ring', 6))
+    .wait(2.6)
     .use(snake(-1, 'aimed', 7, 5))
-    .wait(1.2)
+    .wait(1.0)
     .use(snake(1, 'aimed', 7, -4))
-    .wait(3.0)
+    .use(kestrelDive(4, -8))
+    .wait(2.6)
+    .use(lowCrossing())
+    .wait(2.6)
     .call(chisel(-7, -2, 'burst'))
     .call(chisel(7, 5, 'burst', 5, true))
+    .call(chisel(0, -7, 'fan3', 5))
     .call(d => d.cue('cue.roll'))
-    .wait(3.6)
-    .gate(d => d.hostiles() === 0, 20)
+    .wait(3.4)
+    .gate(d => d.hostiles() === 0, 24)
     .wait(1.2)
 
   b.label('finale')
@@ -153,35 +194,42 @@ export function buildOrbitStage(): Timeline<Director> {
       d.setMusic('meltdown')
     })
     .wait(1.6)
-    // Wave A: the sky fills with scouts.
+    // Wave A: the sky fills with scouts and attack craft.
     .use(snake(-1, 'aimed', 7, 6))
-    .wait(1.0)
+    .wait(0.8)
     .use(snake(1, 'aimed', 7, -4))
-    .wait(1.2)
+    .use(kestrels(3, 'burst', 4))
+    .wait(1.0)
     .use(vee(0, 3, 'fan3'))
-    .wait(4.0)
-    // Wave B: the platforms come back, heavier.
+    .use(vee(-12, -3, 'aimed'))
+    .wait(3.4)
+    // Wave B: the platforms come back, heavier, with a diving wing.
     .call(platforms('fan5'))
     .call(lantern(0, 0, 'spiral', 7))
-    .wait(2.0)
+    .use(kestrelDive(5, 8))
+    .wait(1.8)
     .call(chisel(0, 7, 'ring', 5, true))
-    .wait(3.4)
+    .call(chisel(-12, -6, 'fan5', 5))
+    .wait(3.0)
     // Wave C: mines, junk and a spiral at once.
-    .use(dragnet(5))
+    .use(dragnet(6))
     .use(spiral('burst'))
-    .use(updraft(4))
-    .wait(4.2)
+    .use(updraft(5))
+    .wait(3.6)
     .use(overtake('aimed', 10))
-    .wait(3.4)
+    .use(kestrels(4, 'aimed', -7))
+    .wait(3.0)
     // Wave D: everything the blockade has left.
     .call(lantern(-11, 4, 'ring', 6))
     .call(lantern(11, -2, 'spiral', 6))
+    .call(lantern(0, 9, 'fan5', 6))
     .wait(1.0)
     .use(vee(0, 7, 'aimed'))
-    .wait(0.8)
+    .wait(0.6)
     .use(vee(0, -6, 'ring'))
-    .wait(4.6)
-    .gate(d => d.hostiles() === 0, 26)
+    .use(kestrelDive(5, -9))
+    .wait(4.2)
+    .gate(d => d.hostiles() === 0, 30)
     .wait(1.0)
 
   // Escape burn: the lane opens and the interceptor rides the atmosphere out.

@@ -243,6 +243,46 @@ export function buildShip(id: 'heliospur' | 'vesper' | 'bastion' | 'kite'): Mode
 }
 
 /** MITE: a scout drone — dark core, three mining-yellow cutter legs, a single hot eye. */
+/**
+ * KESTREL fast attack craft (Earth Orbit): a swept-wing dart that dives at the lane, fires a burst
+ * and breaks away. Nose points to -Z like every other ship.
+ */
+export function buildKestrel(): ModelParts {
+  const k = new Kit()
+  const P = PALETTE
+  k.add(cone(0.3, 1.5, 6), P.ivory, { p: [0, 0, -0.95], r: [-HALF, 0, 0] })
+  k.add(box(0.66, 0.34, 1.6), P.hull, { p: [0, 0, 0.15] })
+  // Forward-swept wings with a bright leading edge.
+  k.pair(() => box(1.6, 0.1, 0.6), P.steel, { p: [1.0, 0.04, 0.3], r: [0, -0.5, 0.16] })
+  k.pair(() => box(1.7, 0.06, 0.16), P.sunset, { p: [0.98, 0.06, 0.06], r: [0, -0.5, 0.16] })
+  k.pair(() => box(0.34, 0.22, 0.42), P.mining, { p: [1.66, 0.0, 0.62], r: [0, -0.5, 0] })
+  // Tail fin and a single hot engine.
+  k.add(box(0.14, 0.52, 0.72), P.sunset, { p: [0, 0.3, 0.55] })
+  k.add(cyl(0.24, 0.3, 0.34, 6), P.graphite, { p: [0, 0, 0.98], r: [HALF, 0, 0] })
+  k.add(cyl(0.2, 0.2, 0.12, 6), P.cyanGlow, { p: [0, 0, 1.14], r: [HALF, 0, 0] }, true)
+  k.add(oct(0.15), P.magenta, { p: [0, -0.22, -0.55] }, true)
+  return k.build()
+}
+
+/**
+ * PRISM SHARD (Continuous Loop): a stretched crystal that tumbles across the ribbon and fires thin
+ * needles. Breaking one splits it into two smaller shards, so the sky gets busier as you shoot.
+ */
+export function buildShard(): ModelParts {
+  const k = new Kit()
+  const P = PALETTE
+  k.add(oct(0.7), P.glass, { s: [0.62, 0.62, 2.3] })
+  k.add(oct(0.42), P.cyanGlow, { p: [0, 0, 0.12], s: [0.5, 0.5, 1.7] }, true)
+  k.add(oct(0.3), P.glass, { p: [0, 0, -1.35], s: [0.8, 0.8, 1.4] })
+  // Four pale fins so the silhouette reads at a distance.
+  for (let i = 0; i < 4; i += 1) {
+    const a = (i / 4) * Math.PI * 2
+    k.add(tet(0.44), P.ivoryShade, { p: [Math.cos(a) * 0.62, Math.sin(a) * 0.62, 0.1], r: [0.4, 0, a], s: [0.35, 1.6, 0.5] })
+  }
+  k.add(cyl(0.1, 0.1, 0.26, 6), P.magenta, { p: [0, 0, -1.6], r: [HALF, 0, 0] }, true)
+  return k.build()
+}
+
 export function buildMite(): ModelParts {
   const k = new Kit()
   const P = PALETTE

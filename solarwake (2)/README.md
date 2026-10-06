@@ -51,16 +51,27 @@ Three stages ship today, each one a single engine timeline that only talks to th
 
 1. **Insertion** cinematic over the planet, then a fast scouting lane (`setTheme('orbit')` swaps the
    sky, planet, fog, lighting and clutter for Earth: oceans, drifting clouds, city lights on the night side).
-2. **Kessler cascade**: a tighter, faster debris field than the ring storm — junk, mines and free chain fuel.
+2. **Kessler cascade**: a tighter, faster debris field than the ring storm — junk, big rocks, mines
+   and free chain fuel, with drone pairs and **KESTREL** wings cutting through it.
 3. **Atmospheric skip**: nine seconds of full burn through the upper atmosphere, driven by the
-   `atmosphere()` verb (sky glow, orange post tint, heat in the speed lines).
-4. **Orbital blockade**: platforms, dragnets of mines and gunships above the terminator.
+   `atmosphere()` verb (sky glow, orange post tint, heat in the speed lines) while cutters and craft dive in.
+4. **Orbital blockade**: platforms, dragnets of mines, gunships and attack craft above the terminator.
 5. **Break the blockade** (checkpoint): four escalating waves with no boss — the stage ends on
    `clear()` instead of a boss kill, then an **Orbital Breakout** escape run.
 
+The stage's signature enemy is the **KESTREL** (`kestrel`, 220 pts): a swept-wing attack craft that
+dives at the lane, fires a burst and breaks away. It flies in all four acts and counts towards a
+wave's `hostiles()` gate, so the blockade is not clear until the craft are gone too.
+
 ### Stage 3 · Continuous Loop (`src/game/stage-loop.ts`)
 
-An endless, meditative stage: no boss, no clear, no finish line. The timeline is built with
+An endless, meditative stage with its own crystal fauna: **PRISM SHARDS** (`shard`, 140 pts) tumble
+across the ribbon firing thin needles, and a full-size one **cleaves into two fragments** when it
+breaks (one generation only — a fragment just dies). Crystals drift in from the debris, ride the
+KESTREL wings that cross over the top, and are counted by the cycle's `hostiles()` gate, so the
+void only gets quiet once the sky is swept.
+
+It stays a meditation piece: no boss, no clear, no finish line. The timeline is built with
 `build({ loop: true })`, so the `cycle` label re-fires forever and the run only ends when the ship
 goes down. `setTheme('prism')` drops the sky, planet, belt and warm sun halo and leaves an obsidian
 void with rare stars, faint caustics and a slab of glossy stone far below; `setCamera('glass')`

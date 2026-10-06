@@ -8,10 +8,10 @@ Todas as linhas abaixo foram medidas no checkout atual (`wc -l`), não são esti
 | Item | Valor |
 | --- | --- |
 | Arquivos versionados | 68 no git + 10 novos de código/teste + 2 na raiz (§10, §11, §12) |
-| Linhas em `src/` + `scripts/` + `tests/` | 11.100 |
+| Linhas em `src/` + `scripts/` + `tests/` | 11.400 |
 | Tamanho do projeto (sem `node_modules`/`dist`/`shots`) | 8,1 MB (2,2 MB só de `public/`, quase tudo fonte CJK; 5,3 MB em `assets/`) |
 | `node_modules` / `dist` (gerados, ignorados) | 170 MB / 13 MB |
-| Testes | 8 arquivos, 64 testes, todos verdes (`pnpm test`, ~3 s) |
+| Testes | 8 arquivos, 68 testes, todos verdes (`pnpm test`, ~3 s) |
 | Bundle (gzip) | js 1,76 MB / fontes 1,85 MB / transfer 4,26 MB — dentro do orçamento |
 
 ---
@@ -314,3 +314,57 @@ raspão, projéteis `slug` no ar); run de 100.000 pontos morrendo de propósito 
 `CREDITS EARNED +20,000` e a carteira 0 → 20.000; zh-CN com nomes 彗星/棱堡/纸鸢, 购买 18,000 e
 已装备, comprando `vesper` (40.000 → 28.000). Sem erros de console em nenhuma passagem.
 Capturas: `shots/` (21 PNGs + `galeria.html`).
+
+---
+
+## 13. Fase nova — mais inimigos nas fases 2 e 3
+
+Pedido do usuário: *"add mais inimigos nas fases 2, 3"*. Duas frentes: **duas espécies novas** (uma
+por fase) e **mais tráfego em cada ato** das duas fases.
+
+### Inimigos novos
+
+| id | onde | hull | pontos | comportamento |
+| --- | --- | --- | --- | --- |
+| `kestrel` | fase 2 (Earth Orbit) | 5 | 220 | caça de asa enflechada: entra em voo rasante, dispara `burst`/`aimed` e sai subindo |
+| `shard` | fase 3 (Continuous Loop) | 3 | 140 | cristal que gira devagar pela fita; ao ser destruído um cristal cheio **parte em dois** fragmentos (uma geração só, `shardSplit`) |
+
+Modelos procedurais novos em `models.ts` (`buildKestrel`, `buildShard`, ~40 linhas), stats em
+`STATS` (`enemies.ts`), cores de estilhaço próprias (`primary`/`secondary`/`debris`), entradas de
+pontuação em `config.ts` (`kestrel: 220`, `shard: 140`), e as duas espécies entram em
+`hostileCount` (portanto nos `gate(hostiles() === 0)` das fases 2 e 3, que passam a exigir limpar
+também os caças e os cristais).
+
+Formações novas em `formations.ts`: `kestrels`, `kestrelDive`, `shards`, `shardDrift`.
+
+### Densidade por fase
+
+| Fase | Antes | Agora |
+| --- | --- | --- |
+| 2 · Earth Orbit | 159 spawns, 126 por 100 s, sem caças | **248 spawns, 167 por 100 s**, 50 KESTRELs (`kestrel`) |
+| 3 · Continuous Loop | 314 spawns em 900 s, **20 por ciclo** de 99 s | **350** em 900 s, **50 por ciclo** de 136 s (2,5×), 154 cristais |
+
+Na fase 2 entraram caças em todos os atos (patrulha inicial, campo de Kessler, reentrada
+atmosférica, bloqueio e as quatro ondas do final, que ganharam uma quinta peça cada); na 3 os
+silêncios continuam (9 s de nada no começo do ciclo, 5–8 s entre ondas) e o que cresceu foi a
+população de cada beat, mais o cupim de cristais e uma nova ala de caças antes do descanso longo —
+a câmera fixa e o alto espaço negativo seguem intactos.
+
+Capacidade por instância subiu junto (`mite` 90→130, `chisel` 30→44, `lantern` 10→18, `rock`
+60→96, `mine` 30→48, `bigrock` 24→32, `chunk` 24→32, `cell` 12→16) e as duas espécies novas nascem
+com 40 (KESTREL) e 64 (cristal, que se multiplica ao ser partido) instâncias.
+
+### Verificação
+
+`pnpm typecheck` limpo · `pnpm test` **8 arquivos / 68 testes verdes** (4 testes novos: as duas
+espécies só aparecem nas fases certas, densidade medida com cronômetro — 2,40 spawns/s na fase 2 e
+≥40 spawns por ciclo na 3 —, todo `kind` spawnado tem `STATS`, e a divisão do cristal é uma geração
+só) · `pnpm build` no orçamento · **`pnpm smoke` verde** nas três fases · passe de browser real:
+fase 2 com 6 KESTRELs ao mesmo tempo na pista e 13 hostis, fase 3 com cristais cruzando a fita e a
+quebra conferida no jogo (cristal `scale 1.1` → dois de `scale 0.66`; um fragmento de 0.66 morre sem
+partir), sem erros de console.
+
+Um detalhe de balanceamento descoberto no caminho: um cristal-fragmento herdava `scale 0.6` e
+`hp = round(3 × 0.6) = 2`, mas o `bigrock` usa o `scale` no hull e as outras espécies não — o cristal
+cheio é `hp 3` e o fragmento também, então o certo foi deixar os dois em 3 e limitar a divisão por
+`SHARD_SPLIT_MIN = 0.9` (pura e testada) em vez de fingir um corte de dano.

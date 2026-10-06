@@ -193,5 +193,6 @@
   "ship.bastion.desc": "Heavy line hull with nearly twice the armour and the turning circle to match.",
   "ship.kite.name": "Kite",
   "ship.kite.tag": "Skirmisher",
-  "ship.kite.desc": "Delta-wing skirmisher: a huge shield and a wide graze ring, built to live close to bullets."
+  "ship.kite.desc": "Delta-wing skirmisher: a huge shield and a wide graze ring, built to live close to bullets.",
+  "cue.shard": "Prism shards — break one and it splits in two"
 }

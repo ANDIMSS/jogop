@@ -5,6 +5,7 @@ import { SOUNDTRACK } from '../src/game/audio-content'
 import type { CameraMode, Director, StageTheme } from '../src/game/director'
 import { STAGES, STAGE_INFO, buildStage, isStageId, stageInfo } from '../src/game/stages'
 import { Eases } from '../src/engine/timeline'
+import { ENEMY_STATS, SHARD_SPLIT_MIN, shardSplit } from '../src/game/enemies'
 
 const DICT: Record<string, string>[] = [en as Record<string, string>, zh as Record<string, string>]
 
@@ -21,12 +22,13 @@ type Log = {
   bossStarts: number
   cleared: number
   tutorialDone: number
+  spawns: string[]
 }
 
 /** A Director that only records what the timeline asked for. No scene, no renderer, no DOM. */
 function recorder(log: Log): Director {
   return {
-    spawn: () => undefined,
+    spawn: spec => void log.spawns.push(spec.kind),
     rock: () => undefined,
     mine: () => undefined,
     banner: (key, sub) => void log.banners.push(key, sub),
@@ -50,7 +52,7 @@ function recorder(log: Log): Director {
   }
 }
 
-const emptyLog = (): Log => ({ banners: [], hints: [], cues: [], themes: [], atmosphere: [], music: [], rails: [], cameras: [], checkpoints: [], bossStarts: 0, cleared: 0, tutorialDone: 0 })
+const emptyLog = (): Log => ({ banners: [], hints: [], cues: [], themes: [], atmosphere: [], music: [], rails: [], cameras: [], checkpoints: [], bossStarts: 0, cleared: 0, tutorialDone: 0, spawns: [] })
 
 /** Fly a whole stage headless: 15 script minutes at the fixed 60 Hz step. */
 function fly(stageId: (typeof STAGES)[number]['id']) {
@@ -137,6 +139,54 @@ describe('stage timelines', () => {
     expect(log.banners.filter(b => b === 'loop.cycle.title')).toEqual(['loop.cycle.title'])
     expect(log.rails).toEqual(['cruise'])
     expect(log.themes).toEqual(['prism'])
+  })
+
+  it('fields attack craft and prism crystals in the later stages only', () => {
+    const ring = fly('ring').log.spawns
+    const orbit = fly('orbit').log.spawns
+    const loop = fly('loop').log.spawns
+    // Stage 2 is where the KESTREL wings fly, stage 3 is where the crystals drift, and neither
+    // shows up in the Shattered Ring (its roster is deliberately closed).
+    expect(orbit.filter(k => k === 'kestrel').length).toBeGreaterThanOrEqual(20)
+    expect(loop.filter(k => k === 'shard').length).toBeGreaterThanOrEqual(20)
+    expect(loop.filter(k => k === 'kestrel').length).toBeGreaterThanOrEqual(8)
+    expect([...ring, ...orbit].some(k => k === 'shard')).toBe(false)
+    expect(ring.some(k => k === 'kestrel')).toBe(false)
+  })
+
+  it('keeps both stages denser than their early build', () => {
+    const orbit = fly('orbit')
+    // Density against the stopwatch, not a fixed count, so re-pacing stays legal.
+    expect(orbit.log.spawns.length).toBeGreaterThanOrEqual(200)
+    expect(orbit.log.spawns.length / orbit.tl.elapsed).toBeGreaterThan(1.4)
+
+    // The Loop never ends, so compare like with like: one full cycle, marked by its opening cue.
+    const log = emptyLog()
+    const marks: number[] = []
+    const director: Director = { ...recorder(log), cue: key => void (key === 'cue.ribbon' && marks.push(log.spawns.length)) }
+    const tl = buildStage('loop')
+    const dt = 1 / 60
+    for (let t = 0; t < 900 && !tl.done && marks.length < 3; t += dt) tl.update(dt, director)
+    expect(marks.length).toBeGreaterThanOrEqual(3)
+    const perCycle = marks[2] - marks[1]
+    expect(perCycle).toBeGreaterThanOrEqual(40)
+  })
+
+  it('gives every spawned kind a live catalogue entry', () => {
+    for (const stage of STAGES) {
+      for (const kind of fly(stage.id).log.spawns) expect(ENEMY_STATS[kind as keyof typeof ENEMY_STATS]).toBeDefined()
+    }
+    expect(ENEMY_STATS.kestrel.hp).toBeGreaterThan(ENEMY_STATS.mite.hp)
+    expect(ENEMY_STATS.shard.score).toBeGreaterThan(ENEMY_STATS.rock.score)
+  })
+
+  it('cleaves a crystal once, never forever', () => {
+    expect(shardSplit(1)).toBeCloseTo(0.6)
+    expect(shardSplit(1.1)).toBeCloseTo(0.66)
+    // A fragment is already below the threshold, so a broken shard cannot breed.
+    expect(shardSplit(0.6)).toBe(0)
+    expect(shardSplit(SHARD_SPLIT_MIN)).toBeCloseTo(0.54)
+    expect(shardSplit(SHARD_SPLIT_MIN - 0.01)).toBe(0)
   })
 
   it('only uses i18n keys that exist in every language', () => {
