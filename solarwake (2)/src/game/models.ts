@@ -221,6 +221,36 @@ export function buildOreChunk(): ModelParts {
   return k.build()
 }
 
+/**
+ * Orbital station: a habitat ring on a spine, four spokes, two solar wings and lit windows.
+ * Background geometry for the Earth-orbit stage — read only from a distance.
+ */
+export function buildStation(): ModelParts {
+  const k = new Kit()
+  const P = PALETTE
+  // Spine along Z with a docking hub at the nose.
+  k.add(cyl(0.85, 0.85, 26, 6), P.steel, { r: [HALF, 0, 0] })
+  k.add(cyl(1.7, 1.2, 2.6, 6), P.graphite, { r: [HALF, 0, 0], p: [0, 0, -13] })
+  k.add(oct(1.1), P.cyanGlow, { p: [0, 0, -14.4] }, true)
+  // Habitat ring (torus in the XY plane) with four spokes.
+  k.add(new THREE.TorusGeometry(7.5, 0.85, 4, 18), P.ivoryShade, { p: [0, 0, 1.5] })
+  for (let i = 0; i < 4; i += 1) {
+    const a = (i / 4) * Math.PI * 2
+    k.add(box(0.45, 7.2, 0.45), P.steel, { p: [Math.sin(a) * 3.7, Math.cos(a) * 3.7, 1.5], r: [0, 0, -a] })
+  }
+  // Ring windows: the only self-lit detail, so the station reads at long range.
+  for (let i = 0; i < 10; i += 1) {
+    const a = (i / 10) * Math.PI * 2
+    k.add(box(0.9, 0.28, 0.28), P.cyanGlow, { p: [Math.sin(a) * 7.5, Math.cos(a) * 7.5, 1.9], r: [0, 0, -a] }, true)
+  }
+  // Solar wings on booms.
+  k.pair(() => box(19, 0.22, 6.4), P.hull, { p: [12, 0, 9.5] })
+  k.pair(() => box(6.2, 0.08, 6.0), '#2f6fd0', { p: [12, 0.18, 9.5] })
+  k.pair(() => box(1.6, 0.4, 0.4), P.steel, { p: [4, 0, 9.5] })
+  k.pair(() => tet(0.32), P.ember, { p: [21.4, -0.6, 9.5] }, true)
+  return k.build()
+}
+
 /** Repair cell pickup. */
 export function buildCell(): ModelParts {
   const k = new Kit()

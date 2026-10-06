@@ -16,7 +16,9 @@ import { tuning } from './tuning'
 import { Enemies, ENEMY_STATS, type Enemy, type SpawnSpec } from './enemies'
 import { Environment, SpeedField } from './env'
 import { Fx } from './fx'
-import { buildStage, type Director } from './level'
+import { GlassRibbon } from './glass'
+import type { CameraMode, Director, StageTheme } from './director'
+import { STAGE_INFO, buildStage, type StageId } from './stages'
 import { Rail } from './rail'
 import { addKill, addScore, createRun, graze, grade, hurt, repair, shield, shotFired, shotHit, tick, win, type Grade, type RunState } from './rules'
 import { Ship } from './ship'
@@ -52,7 +54,7 @@ export type HudData = {
   lowHull: boolean
 }
 
-type CamMode = 'play' | 'launch' | 'boss' | 'title' | 'death' | 'victory'
+type CamMode = 'play' | 'glass' | 'launch' | 'boss' | 'title' | 'death' | 'victory'
 
 const tmpA = new THREE.Vector3()
 const tmpB = new THREE.Vector3()
@@ -76,17 +78,24 @@ export class Game implements Arena, Director {
   readonly speed: SpeedField
   readonly ship = new Ship()
   readonly fx: Fx
+  /** The Loop's glass ribbon (rig space); parked and invisible for every other stage. */
+  readonly glass: GlassRibbon
   readonly bullets: EnemyBullets
   readonly shots = new PlayerShots()
   readonly enemies: Enemies
   readonly boss: Boss
   readonly music: Sequencer
-  private stage: Timeline<Director> = buildStage()
+  /** Mission currently selected (menus) and being flown. */
+  stageId: StageId = 'ring'
+  private stageClearBonus = CONFIG.stages.ring.clearBonus
+  private stage: Timeline<Director> = buildStage('ring')
   private fireCooldown = 0
   private gunSide = 1
   private boost = 0
   private boostTarget = 0
   private camMode: CamMode = 'title'
+  /** Camera the stage asked for; `cinematic('none')` returns to it. */
+  private stageCam: CameraMode = 'play'
   private camTime = 0
   private readonly camPos = new THREE.Vector3(0, 2, 10)
   private readonly camLook = new THREE.Vector3(0, 0, -30)
@@ -97,7 +106,7 @@ export class Game implements Arena, Director {
   private mouseIdle = 99
   private readonly aimPoint = new THREE.Vector3(0, 0, -90)
   private locked = false
-  private checkpoint: { run: RunState; s: number } | null = null
+  private checkpoint: { run: RunState; s: number; label: string } | null = null
   private deathTimer = -1
   private winTimer = -1
   private usedCheckpoint = false
@@ -117,6 +126,7 @@ export class Game implements Arena, Director {
     this.speed = new SpeedField(detail)
     this.rig.add(this.speed.group)
     this.fx = new Fx(detail)
+    this.glass = new GlassRibbon(detail)
     this.bullets = new EnemyBullets(1600)
     this.enemies = new Enemies(this, {
       killed: e => this.onKilled(e),
@@ -129,7 +139,7 @@ export class Game implements Arena, Director {
       roll: () => this.hooks.cue('cue.roll'),
     })
     this.boss.attachPhysics()
-    this.combat.add(this.ship.group, ...this.ship.trailMeshes, this.enemies.group, this.boss.root, ...this.boss.beamObjects, this.shots.group, this.bullets.group, this.fx.group)
+    this.combat.add(this.ship.group, ...this.ship.trailMeshes, this.enemies.group, this.boss.root, ...this.boss.beamObjects, this.shots.group, this.bullets.group, this.fx.group, this.glass.object)
     defineSounds(audio)
     this.music = new Sequencer(audio, SOUNDTRACK)
     this.rail.reset(0)
@@ -235,6 +245,25 @@ export class Game implements Arena, Director {
     this.hooks.hint(key)
   }
 
+  setTheme(theme: StageTheme): void {
+    this.env.setTheme(theme)
+    // Only the obsidian void shows the ribbon; the other stages keep the prop parked.
+    this.glass.setEnabled(theme === 'prism')
+  }
+
+  setCamera(mode: CameraMode): void {
+    this.stageCam = mode
+    if (this.camMode === 'play' || this.camMode === 'glass') this.camMode = mode
+  }
+
+  atmosphere(level: number): void {
+    this.env.atmosphere = THREE.MathUtils.clamp(level, 0, 1)
+  }
+
+  cue(key: string): void {
+    this.hooks.cue(key)
+  }
+
   setRail(kind: 'cruise' | 'boost' | 'boss'): void {
     this.rail.targetSpeed = kind === 'boost' ? CONFIG.rail.boost : kind === 'boss' ? CONFIG.rail.boss : CONFIG.rail.speed
     this.boostTarget = kind === 'boost' ? 1 : 0
@@ -260,7 +289,7 @@ export class Game implements Arena, Director {
   }
 
   cinematic(name: 'launch' | 'boss' | 'none'): void {
-    this.camMode = name === 'none' ? 'play' : name
+    this.camMode = name === 'none' ? this.stageCam : name
     this.camTime = 0
   }
 
@@ -273,8 +302,18 @@ export class Game implements Arena, Director {
     return this.boss.state === 'dead'
   }
 
-  checkpointHere(): void {
-    this.checkpoint = { run: { ...this.run }, s: this.rail.s }
+  checkpointHere(label = STAGE_INFO[this.stageId].checkpoint): void {
+    this.checkpoint = { run: { ...this.run }, s: this.rail.s, label }
+  }
+
+  /** Stage won without a boss (gauntlet finale): same victory flow as a boss kill. */
+  clear(): void {
+    if (this.mode !== 'playing' || this.winTimer > 0) return
+    this.run = shield(this.run, 8)
+    this.hooks.bossBar(false)
+    this.winTimer = 2.4
+    this.camMode = 'victory'
+    this.camTime = 0
   }
 
   tutorialFinished(): void {
@@ -305,13 +344,15 @@ export class Game implements Arena, Director {
     this.bullets.speedScale = 1
   }
 
-  start(tutorial: boolean): void {
+  start(tutorial: boolean, stageId: StageId = this.stageId): void {
     tuning.activate('run')
     this.resetWorld()
+    this.stageCam = 'play'
     this.tutorial = tutorial
+    this.setStage(stageId)
     this.run = { ...createRun(), unranked: tuning.unranked }
     this.time = 0
-    this.stage = buildStage()
+    this.stage = buildStage(this.stageId)
     this.checkpoint = null
     this.usedCheckpoint = false
     this.rail.reset(this.rail.s)
@@ -321,18 +362,25 @@ export class Game implements Arena, Director {
     this.reticle.y = 0.05
   }
 
-  /** Retry from the boss checkpoint (score restored to what it was on arrival). */
+  /** Retry from this stage's checkpoint (score restored to what it was on arrival). */
   startFromCheckpoint(): boolean {
     if (!this.checkpoint) return false
     const cp = this.checkpoint
     this.resetWorld()
     this.tutorial = false
     this.run = { ...cp.run, hull: CONFIG.hull.max, shield: CONFIG.shield.max, phase: 'playing', invulnerable: 0 }
-    this.stage = buildStage()
-    this.stage.seek('boss')
+    this.stage = buildStage(this.stageId)
+    this.stage.seek(cp.label)
     this.usedCheckpoint = true
     this.mode = 'playing'
     return true
+  }
+
+  /** Select a mission (menus, attract mode): swaps the backdrop and future runs. */
+  setStage(id: StageId): void {
+    this.stageId = id
+    this.stageClearBonus = CONFIG.stages[id].clearBonus
+    this.env.setTheme(STAGE_INFO[id].theme)
   }
 
   get hasCheckpoint(): boolean {
@@ -353,6 +401,7 @@ export class Game implements Arena, Director {
 
   toTitle(): void {
     this.resetWorld()
+    this.setStage(this.stageId)
     this.mode = 'title'
     this.run = createRun()
     this.camMode = 'title'
@@ -368,7 +417,7 @@ export class Game implements Arena, Director {
   debugSkip(label: string): void {
     this.enemies.clear()
     this.bullets.clear()
-    if (label === 'boss') this.checkpointHere()
+    if (label === 'boss' || label === 'finale') this.checkpointHere(label)
     this.stage.seek(label)
   }
 
@@ -465,7 +514,7 @@ export class Game implements Arena, Director {
     if (this.winTimer > 0) {
       this.winTimer -= dt
       if (this.winTimer <= 0) {
-        this.run = win(this.run)
+        this.run = win(this.run, CONFIG, this.stageClearBonus)
         this.audio.play('win')
         this.setMusic('victory')
         this.finish()
@@ -731,6 +780,7 @@ export class Game implements Arena, Director {
     if (this.mode === 'playing' || this.mode === 'title') this.updateAim(frameSeconds)
     this.enemies.render(alpha, this.time)
     this.boss.draw(alpha, simSeconds, this.time)
+    this.glass.update(simSeconds, frameSeconds)
     this.fx.camQuat.copy(this.camera.quaternion)
     this.bullets.camQuat.copy(this.camera.quaternion)
     this.shots.camQuat.copy(this.camera.quaternion)
@@ -738,7 +788,7 @@ export class Game implements Arena, Director {
     this.fx.render()
     this.bullets.render(this.time)
     this.shots.render(alpha)
-    this.speed.boost = this.boost
+    this.speed.boost = Math.max(this.boost, this.env.atmoLevel * 0.8)
     this.speed.update(simSeconds, this.rail.speed)
     const camWorld = this.camera.getWorldPosition(tmpA)
     this.env.alarm = Math.max(this.env.alarm * (1 - frameSeconds * 0.8), this.boss.alarm * 0.6)
@@ -747,10 +797,18 @@ export class Game implements Arena, Director {
     // Post: distortion pulses, speed blur while boosting, red edge when the hull is low.
     const post = this.renderer.post
     post.aberration = this.impact.distortion * 0.018 * (this.reducedMotion ? 0.3 : 1) + this.boost * 0.0025
+    // Loop stage: subtle chromatic dispersion that only appears towards the frame edges.
+    post.aberrationEdge = this.glass.level * (this.reducedMotion ? 0.002 : 0.0075)
     post.zoom = this.reducedMotion ? 0 : this.boost * 0.09 + this.impact.distortion * 0.05
     const low = this.mode === 'playing' && this.run.hull < 30 ? 0.35 + Math.sin(this.time * 6) * 0.15 : 0
-    post.tint.setRGB(0.7, 0.02, 0.05)
-    post.tintAmount = low + this.env.alarm * 0.25
+    // Grazing the atmosphere warms the frame; otherwise the tint is the damage/alarm red.
+    if (this.env.atmoLevel > 0.02) {
+      post.tint.setRGB(1, 0.46, 0.18)
+      post.tintAmount = low + this.env.atmoLevel * 0.3
+    } else {
+      post.tint.setRGB(0.7, 0.02, 0.05)
+      post.tintAmount = low + this.env.alarm * 0.25
+    }
     post.vignette = 0.38 + this.boost * 0.12
     this.renderer.bloomStrength = 0.85 + this.impact.distortion * 0.5
     this.renderer.render(this.scene, this.camera)
@@ -769,6 +827,17 @@ export class Game implements Arena, Director {
         wantPos.set(sp.x + Math.sin(t) * 8.5, sp.y + 1.6 + Math.sin(t * 0.7) * 1.4, sp.z + Math.cos(t) * 7.5 + 1)
         wantLook.set(sp.x * 0.6, sp.y * 0.6 + 0.2, sp.z - 2)
         fovTarget = 50
+        break
+      }
+      case 'glass': {
+        // Fixed tripod inside the rig: the world streams past the composition instead of the
+        // camera chasing the ship. Only a slow breath keeps it from feeling frozen.
+        const t = this.camTime
+        const breath = Math.sin(t * 0.13) * 0.55 + Math.sin(t * 0.071 + 1.7) * 0.35
+        const sway = Math.sin(t * 0.09 + 0.6) * 0.85 + Math.sin(t * 0.043) * 0.5
+        wantPos.set(sway, 4.15 + breath * 0.5, 16.2 - breath * 0.35)
+        wantLook.set(sway * 0.3, 0.55 + Math.sin(t * 0.05) * 0.35, -46)
+        fovTarget = 68 + Math.sin(t * 0.037) * 1.5
         break
       }
       case 'launch': {

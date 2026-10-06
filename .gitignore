@@ -1,0 +1,14 @@
+# Dependencies and build output
+node_modules/
+dist/
+shots/
+
+# Managed preview state
+.manus-webdev/
+
+# Editor / OS noise
+.DS_Store
+*.log
+
+# Headless browser provisioned by scripts/headless-browser.mjs
+.chromium/

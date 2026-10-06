@@ -5,7 +5,7 @@
 export type Locale = 'en' | 'zh-CN'
 export type Quality = 'low' | 'medium' | 'high'
 
-export type ScoreEntry = { name: string; score: number; seconds: number; at: number; grade?: string }
+export type ScoreEntry = { name: string; score: number; seconds: number; at: number; grade?: string; stage?: string }
 
 export type SaveData = {
   version: 1
@@ -20,6 +20,8 @@ export type SaveData = {
   reducedMotion: boolean
   tutorialDone: boolean
   playerName: string
+  /** Selected mission id; the game validates it against its stage registry. */
+  stage: string
   leaderboard: ScoreEntry[]
 }
 
@@ -39,11 +41,15 @@ export function defaultSave(): SaveData {
     reducedMotion: false,
     tutorialDone: false,
     playerName: 'PLAYER',
+    stage: 'ring',
     leaderboard: [],
   }
 }
 
 const clamp01 = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback)
+
+/** Mission ids stay opaque to the save layer: short lowercase slugs only. */
+const stageSlug = (v: unknown, fallback: string): string => (typeof v === 'string' && /^[a-z][a-z0-9-]{1,15}$/.test(v) ? v : fallback)
 
 /** Parse untrusted stored JSON into a valid SaveData (pure; unit tested). */
 export function parseSave(raw: string | null): SaveData {
@@ -70,10 +76,18 @@ export function parseSave(raw: string | null): SaveData {
     quality: data.quality === 'low' || data.quality === 'medium' || data.quality === 'high' ? data.quality : base.quality,
     reducedMotion: data.reducedMotion === true,
     tutorialDone: data.tutorialDone === true,
+    stage: stageSlug(data.stage, base.stage),
     playerName: typeof data.playerName === 'string' && data.playerName.trim() ? data.playerName.trim().slice(0, 16) : base.playerName,
     leaderboard: board
       .filter((e): e is ScoreEntry => !!e && typeof e === 'object' && typeof (e as ScoreEntry).name === 'string' && Number.isFinite((e as ScoreEntry).score))
-      .map(e => ({ name: e.name.slice(0, 16), score: Math.max(0, Math.floor(e.score)), seconds: Number.isFinite(e.seconds) ? e.seconds : 0, at: Number.isFinite(e.at) ? e.at : 0, grade: typeof e.grade === 'string' && /^[SABCD]$/.test(e.grade) ? e.grade : undefined }))
+      .map(e => ({
+        name: e.name.slice(0, 16),
+        score: Math.max(0, Math.floor(e.score)),
+        seconds: Number.isFinite(e.seconds) ? e.seconds : 0,
+        at: Number.isFinite(e.at) ? e.at : 0,
+        grade: typeof e.grade === 'string' && /^[SABCD]$/.test(e.grade) ? e.grade : undefined,
+        stage: typeof e.stage === 'string' && /^[a-z][a-z0-9-]{1,15}$/.test(e.stage) ? e.stage : undefined,
+      }))
       .slice(0, LEADERBOARD_SIZE),
   }
 }

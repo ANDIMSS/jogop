@@ -10,8 +10,14 @@ pnpm install
 pnpm dev      # dev server
 pnpm build    # typecheck + production build + bundle budget
 pnpm test     # unit tests (rules, timeline, impact toolkit, save, i18n)
-pnpm smoke    # after build: headless playthrough to Results + screenshots in shots/
+pnpm smoke    # after build: headless playthrough of all three stages → screenshots in shots/
 ```
+
+`pnpm smoke` drives a real headless Chromium through the menus and all three missions and fails on
+any console error. It uses Playwright's bundled browser; where that download is blocked, run
+`node scripts/headless-browser.mjs` once and launch with the environment it prints
+(`CHROMIUM_PATH`, `CHROMIUM_ARGS`, `CHROMIUM_LD_LIBRARY_PATH`, and a larger `SMOKE_TIMEOUT` on
+software GL).
 
 ## Controls
 
@@ -23,9 +29,12 @@ pnpm smoke    # after build: headless playthrough to Results + screenshots in sh
 | Roll dodge (i-frames) | Space or K | LT | ROLL button |
 | Pause | Esc | Start | Pause button |
 
-## The level
+## The missions
 
-One level, paced entirely by the engine timeline (`src/game/level.ts`):
+Three stages ship today, each one a single engine timeline that only talks to the scene through
+`Director` verbs (`src/game/stages.ts` is the registry; `src/game/director.ts` is the vocabulary).
+
+### Stage 1 · The Shattered Ring (`src/game/level.ts`)
 
 1. **Launch** cinematic, then a short first-flight tutorial (first play only).
 2. **Wave 1 — scout screen**: MITE drones and CHISEL cutters in readable formations.
@@ -36,8 +45,28 @@ One level, paced entirely by the engine timeline (`src/game/level.ts`):
    - **II · EXCAVATE** — drill petals open to expose the auger core; laser sweeps, ore showers, gapped rings.
    - **III · MELTDOWN** — armour sheds; nova spirals, drill lunge with a shock ring, laser pinwheel.
 
-Score = kills × chain multiplier + grazes + clear and hull bonuses. Results show a grade
-(S/A/B/C/D) and can be saved to the local leaderboard.
+### Stage 2 · Earth Orbit (`src/game/stage-orbit.ts`)
+
+1. **Insertion** cinematic over the planet, then a fast scouting lane (`setTheme('orbit')` swaps the
+   sky, planet, fog, lighting and clutter for Earth: oceans, drifting clouds, city lights on the night side).
+2. **Kessler cascade**: a tighter, faster debris field than the ring storm — junk, mines and free chain fuel.
+3. **Atmospheric skip**: nine seconds of full burn through the upper atmosphere, driven by the
+   `atmosphere()` verb (sky glow, orange post tint, heat in the speed lines).
+4. **Orbital blockade**: platforms, dragnets of mines and gunships above the terminator.
+5. **Break the blockade** (checkpoint): four escalating waves with no boss — the stage ends on
+   `clear()` instead of a boss kill, then an **Orbital Breakout** escape run.
+
+### Stage 3 · Continuous Loop (`src/game/stage-loop.ts`)
+
+An endless, meditative stage: no boss, no clear, no finish line. The timeline is built with
+`build({ loop: true })`, so the `cycle` label re-fires forever and the run only ends when the ship
+goes down. `setTheme('prism')` drops the sky, planet, belt and warm sun halo and leaves an obsidian
+void with rare stars, faint caustics and a slab of glossy stone far below; `setCamera('glass')`
+locks the camera onto a fixed tripod inside the ship's rig, where `GlassRibbon`
+(`src/game/glass.ts`) hangs: one transparent, refractive band that undulates and slowly twists in
+zero gravity, with per-channel fresnel rims and travelling caustics. The composition keeps most of
+the frame empty for the HUD, and the ship's edge-only chromatic dispersion
+(`renderer.ts` → `post.aberrationEdge`) fades in with the ribbon.
 
 ## Layout
 
@@ -52,9 +81,15 @@ Score = kills × chain multiplier + grazes + clear and hull bonuses. Results sho
 | `src/engine/renderer.ts` | WebGL renderer, quality tiers, bloom + post (aberration, zoom, tint, vignette) |
 | `src/engine/audio.ts`, `music.ts` | Mixer buses, synthesized SFX recipes, step-sequenced procedural music |
 | `src/engine/save.ts`, `i18n.ts` | Versioned local save + leaderboard; en / zh-CN with browser detection, saved choice wins |
-| `src/game/config.ts` | All tuning numbers |
+| `src/game/config.ts` | All tuning numbers (including each stage's clear bonus) |
 | `src/game/rules.ts` | Pure hull/shield/combo/score/grade rules (unit tested) |
-| `src/game/level.ts` | The whole level as one timeline script |
+| `src/game/stages.ts` | Stage registry: ids, themes, checkpoint labels, i18n keys, builders |
+| `src/game/director.ts` | The verb vocabulary a stage may use (spawn, banner, theme, atmosphere, clear…) |
+| `src/game/formations.ts` | Reusable formation fragments shared by every stage |
+| `src/game/level.ts` | Stage 1 "The Shattered Ring" as one timeline script |
+| `src/game/stage-orbit.ts` | Stage 2 "Earth Orbit" as one timeline script |
+| `src/game/stage-loop.ts` | Stage 3 "Continuous Loop" as one endless timeline script |
+| `src/game/glass.ts` | The Loop's transparent glass ribbon (band geometry + refraction shaders) |
 | `src/game/boss.ts` | BOREWARDEN: model, parts, phase timelines and attack verbs |
 | `src/game/enemies.ts`, `bullets.ts`, `fx.ts` | Pooled + instanced enemies, bullet patterns, particles |
 | `src/game/ship.ts`, `rail.ts`, `env.ts`, `models.ts` | Player ship, rail spline + camera frame, sky/asteroids/speed field, procedural low-poly models |
@@ -67,7 +102,8 @@ Score = kills × chain multiplier + grazes + clear and hull bonuses. Results sho
   read presses there with `input.consume(action)`.
 - **Rules stay pure.** Scoring, damage and grading live in `rules.ts` with tests.
 - **Pacing goes through timelines, feel goes through `Impact`.** Neither engine module knows
-  about gameplay; the level and the boss only provide verbs.
+  about gameplay; the stages and the boss only provide verbs. A new stage is one file exporting a
+  `Timeline<Director>` plus one entry in `stages.ts` — never a change to `Game`.
 - **Every visible string is an i18n key** in both `en.json` and `zh-CN.json`. Chinese glyphs come
   from the subset font in `public/fonts/`; check new Chinese text renders.
 - **UI is HTML/CSS**, keyboard/gamepad navigable (`data-nav` on focusable controls).

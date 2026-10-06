@@ -4,11 +4,13 @@ import type { Input } from '../engine/input'
 import { insertScore, type Locale, type Quality, type SaveData, type SaveStore } from '../engine/save'
 import type { BannerStyle, HudData, PopupKind } from '../game/game'
 import { accuracy, formatClock, type Grade, type RunState } from '../game/rules'
+import { STAGES, stageInfo, type StageId } from '../game/stages'
 
-export type Screen = 'boot' | 'title' | 'hud' | 'pause' | 'settings' | 'leaderboard' | 'results'
+export type Screen = 'boot' | 'title' | 'hud' | 'pause' | 'settings' | 'leaderboard' | 'results' | 'stages'
 
 export type UiActions = {
-  play(): void
+  /** Launch the selected mission, or the one named by `stage`. */
+  play(stage?: string): void
   resume(): void
   restart(): void
   checkpoint(): void
@@ -59,6 +61,7 @@ export class Ui {
   private lastGrade: Grade = 'D'
   private savedRank = -1
   private lastMethod = ''
+  private lastStage: StageId = 'ring'
   private checkpointRun = false
   private readonly el: Record<string, HTMLElement> = {}
 
@@ -110,6 +113,7 @@ export class Ui {
     }
     this.root.dataset.activeScreen = screen
     if (screen === 'title') this.renderBest()
+    if (screen === 'stages') this.renderStages()
     if (screen === 'leaderboard') this.renderLeaderboard()
     requestAnimationFrame(() => {
       const first = this.navItems()[0]
@@ -261,11 +265,13 @@ export class Ui {
   }
 
   // ─── results ────────────────────────────────────────────────────────────
-  showResults(run: RunState, grade: Grade, info: { checkpoint: boolean; fromCheckpoint: boolean }): void {
+  showResults(run: RunState, grade: Grade, info: { checkpoint: boolean; fromCheckpoint: boolean; stage: string }): void {
     this.lastRun = run
     this.lastGrade = grade
     this.savedRank = -1
     this.checkpointRun = info.fromCheckpoint
+    this.lastStage = stageInfo(info.stage).id
+    this.el.resultsStage.textContent = this.i18n.t(stageInfo(info.stage).nameKey)
     const won = run.phase === 'won'
     const el = this.q('[data-screen="results"]')
     el.classList.toggle('is-won', won)
@@ -303,7 +309,7 @@ export class Ui {
 
   private entry(run: RunState) {
     const name = this.q<HTMLInputElement>('.results-name')?.value.trim().slice(0, 16) || this.save.data.playerName
-    return { name, score: run.score, seconds: Math.round(run.elapsed), at: Date.now(), grade: run.phase === 'won' ? this.lastGrade : 'D' }
+    return { name, score: run.score, seconds: Math.round(run.elapsed), at: Date.now(), grade: run.phase === 'won' ? this.lastGrade : 'D', stage: this.lastStage }
   }
 
   private saveScore(): void {
@@ -326,7 +332,7 @@ export class Ui {
       return
     }
     list.innerHTML = board
-      .map((e, i) => `<li class="${i === this.savedRank ? 'is-me' : ''}" style="--i:${i}"><b>${i + 1}</b><span class="board-name"></span><i class="grade-chip" data-grade="${e.grade ?? 'D'}">${e.grade ?? '–'}</i><em>${e.score.toLocaleString('en-US')}</em></li>`)
+      .map((e, i) => `<li class="${i === this.savedRank ? 'is-me' : ''}" style="--i:${i}"><b>${i + 1}</b><span class="board-name"></span><i class="board-tags"><i class="board-stage">${this.i18n.t(stageInfo(e.stage).shortKey)}</i><i class="grade-chip" data-grade="${e.grade ?? 'D'}">${e.grade ?? '–'}</i></i><em>${e.score.toLocaleString('en-US')}</em></li>`)
       .join('')
     list.querySelectorAll('.board-name').forEach((el, i) => (el.textContent = board[i].name))
   }
@@ -336,6 +342,25 @@ export class Ui {
     const el = this.el.titleBest
     el.classList.toggle('is-hidden', best <= 0)
     el.textContent = this.i18n.t('menu.best', { score: best.toLocaleString('en-US') })
+    this.el.titleStage.textContent = `${this.i18n.t('menu.selected')} ${this.i18n.t(stageInfo(this.save.data.stage).nameKey)}`
+  }
+
+  /** Mission select: one card per stage with that stage's best score. */
+  private renderStages(): void {
+    const board = this.save.data.leaderboard
+    this.el.stageList.innerHTML = STAGES.map(s => {
+      const best = board.reduce((m, e) => (stageInfo(e.stage).id === s.id ? Math.max(m, e.score) : m), 0)
+      const current = stageInfo(this.save.data.stage).id === s.id
+      return `<button data-nav class="stage-card${current ? ' is-current' : ''}" data-action="play" data-stage="${s.id}">
+        <span class="stage-tag" data-i18n="${s.tagKey}"></span>
+        <b data-i18n="${s.nameKey}"></b>
+        <i data-i18n="${s.descKey}"></i>
+        <em>${best > 0 ? this.i18n.t('menu.best', { score: best.toLocaleString('en-US') }) : this.i18n.t('menu.noRecord')}</em>
+        <span class="stage-go" data-i18n="${current ? 'menu.resumeStage' : 'menu.deploy'}"></span>
+      </button>`
+    }).join('')
+    // Translate just the new cards: a full translate() would re-enter renderStages().
+    for (const el of this.el.stageList.querySelectorAll<HTMLElement>('[data-i18n]')) el.textContent = this.i18n.t(el.dataset.i18n!)
   }
 
   // ─── settings ───────────────────────────────────────────────────────────
@@ -387,7 +412,8 @@ export class Ui {
     const action = target.dataset.action
     if (action && action !== 'pause') this.audio.play('uiConfirm')
     switch (action) {
-      case 'play': this.actions.play(); break
+      case 'play': this.actions.play(target.dataset.stage); break
+      case 'stages': this.push('stages'); break
       case 'resume': this.actions.resume(); break
       case 'restart': this.actions.restart(); break
       case 'checkpoint': this.actions.checkpoint(); break
@@ -496,6 +522,7 @@ export class Ui {
     this.renderHint()
     this.renderControls()
     if (this.screen === 'title') this.renderBest()
+    if (this.screen === 'stages') this.renderStages()
     if (this.screen === 'leaderboard') this.renderLeaderboard()
     this.cache.delete('bossPhase')
     document.title = `${this.i18n.t('game.title')} · ${this.i18n.t('game.subtitle')}`
@@ -558,8 +585,10 @@ export class Ui {
       <div class="logo-sub"><span data-i18n="game.subtitle"></span></div>
     </div>
     <p class="tagline" data-i18n="game.tagline"></p>
+    <div class="title-stage" data-el="titleStage"></div>
     <nav class="menu">
       <button data-nav class="btn btn-primary" data-action="play"><span data-i18n="menu.play"></span></button>
+      <button data-nav class="btn" data-action="stages"><span data-i18n="menu.stages"></span></button>
       <button data-nav class="btn" data-action="leaderboard"><span data-i18n="menu.leaderboard"></span></button>
       <button data-nav class="btn" data-action="settings"><span data-i18n="menu.settings"></span></button>
     </nav>
@@ -651,6 +680,15 @@ export class Ui {
   <footer class="bottom-bar"><div class="prompts"></div></footer>
 </section>
 
+<section class="screen screen-stages screen-modal" data-screen="stages">
+  <div class="modal modal-wide">
+    <h2 class="modal-title" data-i18n="menu.stages"></h2>
+    <div class="stage-list" data-el="stageList"></div>
+    <nav class="menu menu-row"><button data-nav class="btn" data-action="back"><span data-i18n="menu.back"></span></button></nav>
+  </div>
+  <footer class="bottom-bar"><div class="prompts"></div></footer>
+</section>
+
 <section class="screen screen-leaderboard screen-modal" data-screen="leaderboard">
   <div class="modal">
     <h2 class="modal-title" data-i18n="leaderboard.title"></h2>
@@ -664,6 +702,7 @@ export class Ui {
 <section class="screen screen-results screen-modal" data-screen="results">
   <div class="modal modal-results">
     <h2 class="results-title modal-title" data-el="resultsTitle"></h2>
+    <div class="results-stage" data-el="resultsStage"></div>
     <div class="results-main">
       <div class="grade-badge" data-el="gradeBadge"><small data-i18n="results.grade"></small><b data-el="gradeLetter">S</b></div>
       <dl class="results-table" data-el="resultsTable"></dl>

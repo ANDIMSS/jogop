@@ -5,6 +5,7 @@ import { Input } from './engine/input'
 import { GameLoop } from './engine/loop'
 import { SAVE_KEY, SaveStore, type SaveData } from './engine/save'
 import type { Game } from './game/game'
+import { isStageId, stageInfo } from './game/stages'
 import { TouchControls } from './ui/touch'
 import { Ui } from './ui/ui'
 
@@ -30,11 +31,15 @@ async function boot(): Promise<void> {
     input.endFrame()
     input.lockPointer()
   }
-  const startRun = (tutorial: boolean) => {
+  const startRun = (stage?: string) => {
     if (!game) return
     audio.unlock()
+    const id = stageInfo(isStageId(stage) ? stage : save.data.stage).id
+    if (isStageId(stage) && stage !== save.data.stage) save.update({ stage })
+    // The first-flight tutorial belongs to the ring stage only; any other stage skips it.
+    const tutorial = !save.data.tutorialDone && id === 'ring'
     ui.clearHudFx()
-    game.start(tutorial)
+    game.start(tutorial, id)
     enterRun()
   }
   const pause = () => {
@@ -52,13 +57,13 @@ async function boot(): Promise<void> {
     input.lockPointer()
   }
   const ui = new Ui(i18n, save, audio, input, {
-    play: () => startRun(!save.data.tutorialDone),
-    restart: () => startRun(false),
+    play: stage => startRun(stage),
+    restart: () => startRun(),
     checkpoint: () => {
       if (!game) return
       ui.clearHudFx()
       if (game.startFromCheckpoint()) enterRun()
-      else startRun(false)
+      else startRun()
     },
     resume,
     quit: () => {
@@ -107,7 +112,7 @@ async function boot(): Promise<void> {
     end: (run, info) => {
       input.unlockPointer()
       const fromCheckpoint = g.usedCheckpointRun
-      window.setTimeout(() => ui.showResults(run, info.grade, { checkpoint: info.checkpoint, fromCheckpoint }), run.phase === 'won' ? 1600 : 700)
+      window.setTimeout(() => ui.showResults(run, info.grade, { checkpoint: info.checkpoint, fromCheckpoint, stage: g.stageId }), run.phase === 'won' ? 1600 : 700)
     },
   })
   game.reducedMotion = save.data.reducedMotion
@@ -134,6 +139,7 @@ async function boot(): Promise<void> {
     },
   })
   loop.start()
+  g.setStage(stageInfo(save.data.stage).id)
   g.toTitle()
 
   // Browsers only allow audio after a gesture: unlock on the first input and start the title theme.
