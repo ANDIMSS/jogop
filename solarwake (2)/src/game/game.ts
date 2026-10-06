@@ -10,13 +10,16 @@ import type { Timeline } from '../engine/timeline'
 import { QUERY_SHOTS, type Arena } from './arena'
 import { SOUNDTRACK, defineSounds } from './audio-content'
 import { Boss, type BossState } from './boss'
-import { EnemyBullets, PlayerShots, type EnemyBullet } from './bullets'
+import { EnemyBullets, PlayerShots, type EnemyBullet, type Shot } from './bullets'
 import { CONFIG } from './config'
+import { loadoutOf, shipRules, weaponDef, weaponLevel, weaponStats, type Loadout, type WeaponId } from './arsenal'
 import { tuning } from './tuning'
 import { Enemies, ENEMY_STATS, type Enemy, type SpawnSpec } from './enemies'
 import { Environment, SpeedField } from './env'
 import { Fx } from './fx'
-import { buildStage, type Director } from './level'
+import { GlassRibbon } from './glass'
+import type { CameraMode, Director, StageTheme } from './director'
+import { STAGE_INFO, buildStage, type StageId } from './stages'
 import { Rail } from './rail'
 import { addKill, addScore, createRun, graze, grade, hurt, repair, shield, shotFired, shotHit, tick, win, type Grade, type RunState } from './rules'
 import { Ship } from './ship'
@@ -50,10 +53,13 @@ export type HudData = {
   boss: { phase: number; fraction: number; total: number } | null
   reticle: { x: number; y: number; inner: { x: number; y: number }; locked: boolean; visible: boolean }
   lowHull: boolean
+  /** Equipped weapon (i18n key) and its level, for the HUD chip. */
+  weapon: { tag: string; level: number }
 }
 
-type CamMode = 'play' | 'launch' | 'boss' | 'title' | 'death' | 'victory'
+type CamMode = 'play' | 'glass' | 'launch' | 'boss' | 'title' | 'death' | 'victory'
 
+const UP = new THREE.Vector3(0, 1, 0)
 const tmpA = new THREE.Vector3()
 const tmpB = new THREE.Vector3()
 const tmpC = new THREE.Vector3()
@@ -76,17 +82,28 @@ export class Game implements Arena, Director {
   readonly speed: SpeedField
   readonly ship = new Ship()
   readonly fx: Fx
+  /** The Loop's glass ribbon (rig space); parked and invisible for every other stage. */
+  readonly glass: GlassRibbon
   readonly bullets: EnemyBullets
   readonly shots = new PlayerShots()
   readonly enemies: Enemies
   readonly boss: Boss
   readonly music: Sequencer
-  private stage: Timeline<Director> = buildStage()
+  /** Mission currently selected (menus) and being flown. */
+  stageId: StageId = 'ring'
+  /** Hangar kit in use: which hull is flown and which trigger is wired to the guns. */
+  loadout: Loadout = loadoutOf()
+  /** Rules for the current hull (hull/shield maxima). Rebuilt whenever the kit changes. */
+  private rules: typeof CONFIG = CONFIG
+  private stageClearBonus = CONFIG.stages.ring.clearBonus
+  private stage: Timeline<Director> = buildStage('ring')
   private fireCooldown = 0
   private gunSide = 1
   private boost = 0
   private boostTarget = 0
   private camMode: CamMode = 'title'
+  /** Camera the stage asked for; `cinematic('none')` returns to it. */
+  private stageCam: CameraMode = 'play'
   private camTime = 0
   private readonly camPos = new THREE.Vector3(0, 2, 10)
   private readonly camLook = new THREE.Vector3(0, 0, -30)
@@ -97,7 +114,7 @@ export class Game implements Arena, Director {
   private mouseIdle = 99
   private readonly aimPoint = new THREE.Vector3(0, 0, -90)
   private locked = false
-  private checkpoint: { run: RunState; s: number } | null = null
+  private checkpoint: { run: RunState; s: number; label: string } | null = null
   private deathTimer = -1
   private winTimer = -1
   private usedCheckpoint = false
@@ -117,6 +134,7 @@ export class Game implements Arena, Director {
     this.speed = new SpeedField(detail)
     this.rig.add(this.speed.group)
     this.fx = new Fx(detail)
+    this.glass = new GlassRibbon(detail)
     this.bullets = new EnemyBullets(1600)
     this.enemies = new Enemies(this, {
       killed: e => this.onKilled(e),
@@ -129,7 +147,7 @@ export class Game implements Arena, Director {
       roll: () => this.hooks.cue('cue.roll'),
     })
     this.boss.attachPhysics()
-    this.combat.add(this.ship.group, ...this.ship.trailMeshes, this.enemies.group, this.boss.root, ...this.boss.beamObjects, this.shots.group, this.bullets.group, this.fx.group)
+    this.combat.add(this.ship.group, ...this.ship.trailMeshes, this.enemies.group, this.boss.root, ...this.boss.beamObjects, this.shots.group, this.bullets.group, this.fx.group, this.glass.object)
     defineSounds(audio)
     this.music = new Sequencer(audio, SOUNDTRACK)
     this.rail.reset(0)
@@ -157,7 +175,7 @@ export class Game implements Arena, Director {
     if (!this.playerAlive || this.mode !== 'playing') return false
     if (this.ship.rolling) return false
     if (this.debug.invincible) return false
-    const r = hurt(this.run, amount)
+    const r = hurt(this.run, amount, this.rules)
     if (r.blocked) return false
     this.run = r.state
     const dx = THREE.MathUtils.clamp(this.ship.pos.x - from.x, -1, 1)
@@ -189,7 +207,7 @@ export class Game implements Arena, Director {
     if (this.mode !== 'playing') return
     let points: number
     if (kill) {
-      const r = addKill(this.run, base)
+      const r = addKill(this.run, base, this.rules)
       this.run = r.state
       points = r.points
       if (r.levelUp) {
@@ -198,7 +216,7 @@ export class Game implements Arena, Director {
       }
       this.lastMultiplier = r.multiplier
     } else {
-      const r = addScore(this.run, base)
+      const r = addScore(this.run, base, this.rules)
       this.run = r.state
       points = r.points
     }
@@ -235,6 +253,25 @@ export class Game implements Arena, Director {
     this.hooks.hint(key)
   }
 
+  setTheme(theme: StageTheme): void {
+    this.env.setTheme(theme)
+    // Only the obsidian void shows the ribbon; the other stages keep the prop parked.
+    this.glass.setEnabled(theme === 'prism')
+  }
+
+  setCamera(mode: CameraMode): void {
+    this.stageCam = mode
+    if (this.camMode === 'play' || this.camMode === 'glass') this.camMode = mode
+  }
+
+  atmosphere(level: number): void {
+    this.env.atmosphere = THREE.MathUtils.clamp(level, 0, 1)
+  }
+
+  cue(key: string): void {
+    this.hooks.cue(key)
+  }
+
   setRail(kind: 'cruise' | 'boost' | 'boss'): void {
     this.rail.targetSpeed = kind === 'boost' ? CONFIG.rail.boost : kind === 'boss' ? CONFIG.rail.boss : CONFIG.rail.speed
     this.boostTarget = kind === 'boost' ? 1 : 0
@@ -260,7 +297,7 @@ export class Game implements Arena, Director {
   }
 
   cinematic(name: 'launch' | 'boss' | 'none'): void {
-    this.camMode = name === 'none' ? 'play' : name
+    this.camMode = name === 'none' ? this.stageCam : name
     this.camTime = 0
   }
 
@@ -273,8 +310,18 @@ export class Game implements Arena, Director {
     return this.boss.state === 'dead'
   }
 
-  checkpointHere(): void {
-    this.checkpoint = { run: { ...this.run }, s: this.rail.s }
+  checkpointHere(label = STAGE_INFO[this.stageId].checkpoint): void {
+    this.checkpoint = { run: { ...this.run }, s: this.rail.s, label }
+  }
+
+  /** Stage won without a boss (gauntlet finale): same victory flow as a boss kill. */
+  clear(): void {
+    if (this.mode !== 'playing' || this.winTimer > 0) return
+    this.run = shield(this.run, 8)
+    this.hooks.bossBar(false)
+    this.winTimer = 2.4
+    this.camMode = 'victory'
+    this.camTime = 0
   }
 
   tutorialFinished(): void {
@@ -305,13 +352,35 @@ export class Game implements Arena, Director {
     this.bullets.speedScale = 1
   }
 
-  start(tutorial: boolean): void {
+  /** Equip a hangar kit: the hull model changes immediately, the weapons apply on the next pull. */
+  setLoadout(loadout: Loadout): void {
+    this.loadout = loadout
+    this.rules = shipRules(loadout.ship)
+    this.ship.configure(loadout.ship)
+    if (this.mode !== 'playing' && this.mode !== 'paused') this.run = createRun(this.rules)
+  }
+
+  /** Equipped weapon id and level (the HUD and the smoke test read this). */
+  get weapon(): { id: WeaponId; level: number } {
+    return { id: this.loadout.weapon, level: weaponLevel(this.loadout, this.loadout.weapon) }
+  }
+
+  /** Rules in force for the current hull (hull/shield maxima). */
+  get activeRules(): typeof CONFIG {
+    return this.rules
+  }
+
+  start(tutorial: boolean, stageId: StageId = this.stageId): void {
     tuning.activate('run')
+    this.rules = shipRules(this.loadout.ship)
+    this.ship.configure(this.loadout.ship)
     this.resetWorld()
+    this.stageCam = 'play'
     this.tutorial = tutorial
-    this.run = { ...createRun(), unranked: tuning.unranked }
+    this.setStage(stageId)
+    this.run = { ...createRun(this.rules), unranked: tuning.unranked }
     this.time = 0
-    this.stage = buildStage()
+    this.stage = buildStage(this.stageId)
     this.checkpoint = null
     this.usedCheckpoint = false
     this.rail.reset(this.rail.s)
@@ -321,18 +390,25 @@ export class Game implements Arena, Director {
     this.reticle.y = 0.05
   }
 
-  /** Retry from the boss checkpoint (score restored to what it was on arrival). */
+  /** Retry from this stage's checkpoint (score restored to what it was on arrival). */
   startFromCheckpoint(): boolean {
     if (!this.checkpoint) return false
     const cp = this.checkpoint
     this.resetWorld()
     this.tutorial = false
-    this.run = { ...cp.run, hull: CONFIG.hull.max, shield: CONFIG.shield.max, phase: 'playing', invulnerable: 0 }
-    this.stage = buildStage()
-    this.stage.seek('boss')
+    this.run = { ...cp.run, hull: this.rules.hull.max, shield: this.rules.shield.max, phase: 'playing', invulnerable: 0 }
+    this.stage = buildStage(this.stageId)
+    this.stage.seek(cp.label)
     this.usedCheckpoint = true
     this.mode = 'playing'
     return true
+  }
+
+  /** Select a mission (menus, attract mode): swaps the backdrop and future runs. */
+  setStage(id: StageId): void {
+    this.stageId = id
+    this.stageClearBonus = CONFIG.stages[id].clearBonus
+    this.env.setTheme(STAGE_INFO[id].theme)
   }
 
   get hasCheckpoint(): boolean {
@@ -353,8 +429,9 @@ export class Game implements Arena, Director {
 
   toTitle(): void {
     this.resetWorld()
+    this.setStage(this.stageId)
     this.mode = 'title'
-    this.run = createRun()
+    this.run = createRun(this.rules)
     this.camMode = 'title'
     this.audio.duckMusic(1)
     this.setMusic('title')
@@ -368,7 +445,7 @@ export class Game implements Arena, Director {
   debugSkip(label: string): void {
     this.enemies.clear()
     this.bullets.clear()
-    if (label === 'boss') this.checkpointHere()
+    if (label === 'boss' || label === 'finale') this.checkpointHere(label)
     this.stage.seek(label)
   }
 
@@ -378,7 +455,7 @@ export class Game implements Arena, Director {
   }
 
   private onCollected(e: Enemy): void {
-    this.run = repair(this.run, CONFIG.repair.hull, CONFIG.repair.shield)
+    this.run = repair(this.run, CONFIG.repair.hull, CONFIG.repair.shield, this.rules)
     this.audio.play('pickup')
     this.fx.ring(e.pos, 5, '#9dff5c', 0.4)
     this.fx.flare(e.pos, 4, '#9dff5c', 0.3)
@@ -432,7 +509,7 @@ export class Game implements Arena, Director {
     if (!controllable) move = { x: 0, y: 0 }
     if (controllable && (this.input.consume('roll') || (this.debug.bot && this.botShouldRoll()))) {
       if (this.ship.roll(move.x || this.ship.vel.x)) {
-        this.run = shield(this.run, CONFIG.roll.invulnerable)
+        this.run = shield(this.run, CONFIG.roll.invulnerable, this.rules)
         this.audio.play('roll')
         this.impact.kick(-Math.sign(move.x || 1) * 0.25, 0)
       }
@@ -448,8 +525,8 @@ export class Game implements Arena, Director {
     this.boss.step(dt)
     this.physics.step(dt)
     this.stepShots(dt)
-    this.bullets.update(dt, this.ship.pos, CONFIG.ship.hitRadius, CONFIG.ship.grazeRadius, b => this.onBulletHit(b), b => this.onGraze(b))
-    if (playing) this.run = tick(this.run, dt)
+    this.bullets.update(dt, this.ship.pos, this.ship.hitRadius, this.ship.grazeRadius, b => this.onBulletHit(b), b => this.onGraze(b))
+    if (playing) this.run = tick(this.run, dt, this.rules)
     if (this.run.combo === 0) this.lastMultiplier = 1
     if (playing && this.run.hull < 30 && this.ship.alive) {
       this.lowHullBeep -= dt
@@ -465,7 +542,7 @@ export class Game implements Arena, Director {
     if (this.winTimer > 0) {
       this.winTimer -= dt
       if (this.winTimer <= 0) {
-        this.run = win(this.run)
+        this.run = win(this.run, this.rules, this.stageClearBonus)
         this.audio.play('win')
         this.setMusic('victory')
         this.finish()
@@ -481,7 +558,7 @@ export class Game implements Arena, Director {
       this.audio.play('lose')
       this.setMusic('defeat')
     }
-    this.hooks.end(this.run, { grade: grade(this.run), checkpoint: this.run.phase === 'lost' && this.checkpoint !== null })
+    this.hooks.end(this.run, { grade: grade(this.run, this.rules), checkpoint: this.run.phase === 'lost' && this.checkpoint !== null })
   }
 
   private stepTitle(dt: number): void {
@@ -495,24 +572,55 @@ export class Game implements Arena, Director {
     this.stepShots(dt)
   }
 
+  /**
+   * One trigger pull of the equipped weapon. The weapon's level decides how many projectiles leave
+   * the muzzles, how wide they fan out and how hard the frame kicks; alternating muzzles are only
+   * used by single-shot guns, so a shotgun blast comes from the centre and a rail slug from the nose.
+   */
   private fire(): void {
-    this.fireCooldown += 1 / CONFIG.weapon.rate
+    const w = weaponStats(this.loadout.weapon, weaponLevel(this.loadout, this.loadout.weapon))
+    this.fireCooldown += 1 / w.rate
     if (this.fireCooldown < 0) this.fireCooldown = 0
-    this.gunSide *= -1
+    const muzzles = w.count > 1 && w.spread <= 0.02 ? 2 : 1
+    let fired = 0
+    for (let i = 0; i < w.count; i += 1) {
+      const side = muzzles === 2 ? (i % 2 === 0 ? -1 : 1) : (this.gunSide *= -1)
+      const m = this.ship.muzzle(side, tmpA)
+      // Fan multi-shot weapons inside their cone; single shots go straight down the reticle.
+      const angle = w.count > 1 && w.spread > 0 ? (i / (w.count - 1) - 0.5) * w.spread * 2 : 0
+      const dir = tmpB.subVectors(this.aimPoint, m).normalize()
+      if (angle !== 0) dir.applyAxisAngle(UP, angle)
+      const shot = this.shots.fire(m, dir, w.speed, w)
+      if (shot) fired += 1
+    }
+    if (fired > 0) this.run = shotFired(this.run, fired)
     const m = this.ship.muzzle(this.gunSide, tmpA)
-    const dir = tmpB.subVectors(this.aimPoint, m).normalize()
-    this.shots.fire(m, dir, CONFIG.weapon.speed, CONFIG.weapon.range / CONFIG.weapon.speed, CONFIG.weapon.damage)
-    this.run = shotFired(this.run)
-    this.fx.muzzle(m, '#ffb347')
-    this.audio.play('shoot')
-    this.impact.kick(0, -0.012)
+    this.fx.muzzle(m, w.glow)
+    this.audio.play(w.sfx)
+    this.impact.kick(0, -w.kick)
+  }
+
+  /**
+   * Blast damage for splash weapons: everything inside the radius takes a fraction of the direct
+   * hit. `skip` is the hull that took the hit itself, so nothing is counted twice.
+   */
+  private splashHit(s: Shot, at: THREE.Vector3, skip?: Enemy): void {
+    if (s.splash <= 0) return
+    this.enemies.damageArea(at, s.splash, s.damage * s.splashtRatio, skip)
+    this.fx.explode(at, s.splash * 0.3, s.color.getHexString(), s.glow.getHexString())
+    this.impact.shake(0.12)
+  }
+
+  /** Seeker target for one projectile, or null when nothing is in range ahead of it. */
+  private homingTarget(s: Shot): THREE.Vector3 | null {
+    if (s.homing <= 0) return null
+    const e = this.enemies.nearest(s.pos, 190)
+    return e ? e.pos : null
   }
 
   private stepShots(dt: number): void {
     this.shots.pool.update(s => {
-      s.prev.copy(s.pos)
-      s.pos.addScaledVector(s.vel, dt)
-      s.life -= dt
+      this.shots.advance(s, dt, this.homingTarget(s))
       if (s.life <= 0) return false
       const hit = this.physics.segment(s.prev, s.pos, QUERY_SHOTS)
       if (!hit) return true
@@ -523,13 +631,23 @@ export class Game implements Arena, Director {
           this.enemies.damage(e, s.damage, at)
           this.run = shotHit(this.run)
         }
+        this.splashHit(s, at, e)
+        // Piercing rounds carry on through, skipping past the hull they just opened.
+        if (s.pierce > 0) {
+          s.pierce -= 1
+          this.shots.skip(s, 0.75)
+          return true
+        }
         return false
       }
       const part = this.boss.partFor(hit.collider.handle)
       if (part) {
         if (this.boss.damage(part, s.damage, at)) this.run = shotHit(this.run)
+        this.splashHit(s, at)
         return false
       }
+      // Terrain and rocks: the blast still lands.
+      this.splashHit(s, at)
       return false
     })
   }
@@ -544,7 +662,7 @@ export class Game implements Arena, Director {
 
   private onGraze(b: EnemyBullet): void {
     if (!this.playerAlive || this.mode !== 'playing') return
-    const r = graze(this.run)
+    const r = graze(this.run, this.rules)
     this.run = r.state
     this.audio.play('graze')
     this.fx.spark(b.pos, tmpA.subVectors(b.pos, this.ship.pos).normalize().multiplyScalar(10), '#bff4ff', 0.25, 0.08)
@@ -731,6 +849,7 @@ export class Game implements Arena, Director {
     if (this.mode === 'playing' || this.mode === 'title') this.updateAim(frameSeconds)
     this.enemies.render(alpha, this.time)
     this.boss.draw(alpha, simSeconds, this.time)
+    this.glass.update(simSeconds, frameSeconds)
     this.fx.camQuat.copy(this.camera.quaternion)
     this.bullets.camQuat.copy(this.camera.quaternion)
     this.shots.camQuat.copy(this.camera.quaternion)
@@ -738,7 +857,7 @@ export class Game implements Arena, Director {
     this.fx.render()
     this.bullets.render(this.time)
     this.shots.render(alpha)
-    this.speed.boost = this.boost
+    this.speed.boost = Math.max(this.boost, this.env.atmoLevel * 0.8)
     this.speed.update(simSeconds, this.rail.speed)
     const camWorld = this.camera.getWorldPosition(tmpA)
     this.env.alarm = Math.max(this.env.alarm * (1 - frameSeconds * 0.8), this.boss.alarm * 0.6)
@@ -747,10 +866,18 @@ export class Game implements Arena, Director {
     // Post: distortion pulses, speed blur while boosting, red edge when the hull is low.
     const post = this.renderer.post
     post.aberration = this.impact.distortion * 0.018 * (this.reducedMotion ? 0.3 : 1) + this.boost * 0.0025
+    // Loop stage: subtle chromatic dispersion that only appears towards the frame edges.
+    post.aberrationEdge = this.glass.level * (this.reducedMotion ? 0.002 : 0.0075)
     post.zoom = this.reducedMotion ? 0 : this.boost * 0.09 + this.impact.distortion * 0.05
     const low = this.mode === 'playing' && this.run.hull < 30 ? 0.35 + Math.sin(this.time * 6) * 0.15 : 0
-    post.tint.setRGB(0.7, 0.02, 0.05)
-    post.tintAmount = low + this.env.alarm * 0.25
+    // Grazing the atmosphere warms the frame; otherwise the tint is the damage/alarm red.
+    if (this.env.atmoLevel > 0.02) {
+      post.tint.setRGB(1, 0.46, 0.18)
+      post.tintAmount = low + this.env.atmoLevel * 0.3
+    } else {
+      post.tint.setRGB(0.7, 0.02, 0.05)
+      post.tintAmount = low + this.env.alarm * 0.25
+    }
     post.vignette = 0.38 + this.boost * 0.12
     this.renderer.bloomStrength = 0.85 + this.impact.distortion * 0.5
     this.renderer.render(this.scene, this.camera)
@@ -769,6 +896,17 @@ export class Game implements Arena, Director {
         wantPos.set(sp.x + Math.sin(t) * 8.5, sp.y + 1.6 + Math.sin(t * 0.7) * 1.4, sp.z + Math.cos(t) * 7.5 + 1)
         wantLook.set(sp.x * 0.6, sp.y * 0.6 + 0.2, sp.z - 2)
         fovTarget = 50
+        break
+      }
+      case 'glass': {
+        // Fixed tripod inside the rig: the world streams past the composition instead of the
+        // camera chasing the ship. Only a slow breath keeps it from feeling frozen.
+        const t = this.camTime
+        const breath = Math.sin(t * 0.13) * 0.55 + Math.sin(t * 0.071 + 1.7) * 0.35
+        const sway = Math.sin(t * 0.09 + 0.6) * 0.85 + Math.sin(t * 0.043) * 0.5
+        wantPos.set(sway, 4.15 + breath * 0.5, 16.2 - breath * 0.35)
+        wantLook.set(sway * 0.3, 0.55 + Math.sin(t * 0.05) * 0.35, -46)
+        fovTarget = 68 + Math.sin(t * 0.037) * 1.5
         break
       }
       case 'launch': {
@@ -833,9 +971,9 @@ export class Game implements Arena, Director {
       multiplier: mult,
       combo: r.combo,
       comboFraction: r.combo > 0 ? r.comboTimer / CONFIG.combo.window : 0,
-      hull: r.hull / CONFIG.hull.max,
-      shield: r.shield / CONFIG.shield.max,
-      rollReady: this.ship.rollCooldown > 0 ? 1 - this.ship.rollCooldown / (CONFIG.roll.duration + CONFIG.roll.cooldown) : 1,
+      hull: r.hull / this.rules.hull.max,
+      shield: r.shield / this.rules.shield.max,
+      rollReady: this.ship.rollCooldown > 0 ? 1 - this.ship.rollCooldown / this.ship.rollCycle : 1,
       grazes: r.grazes,
       boss: this.boss.active ? this.boss.health : null,
       reticle: {
@@ -845,7 +983,8 @@ export class Game implements Arena, Director {
         locked: this.locked,
         visible: this.mode === 'playing' && this.ship.alive && this.camMode !== 'launch' && this.camMode !== 'victory',
       },
-      lowHull: r.hull < 30,
+      lowHull: r.hull < this.rules.hull.max * 0.3,
+      weapon: { tag: weaponDef(this.loadout.weapon).tagKey, level: this.weapon.level },
     }
   }
 

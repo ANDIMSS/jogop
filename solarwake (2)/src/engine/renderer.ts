@@ -39,6 +39,7 @@ const FinishShader = {
   uniforms: {
     tDiffuse: { value: null },
     uAberration: { value: 0 },
+    uAberrationEdge: { value: 0 },
     uZoom: { value: 0 },
     uVignette: { value: 0.35 },
     uTint: { value: new THREE.Color(0, 0, 0) },
@@ -50,7 +51,7 @@ const FinishShader = {
     void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
-    uniform float uAberration, uZoom, uVignette, uTintAmount, uTime;
+    uniform float uAberration, uAberrationEdge, uZoom, uVignette, uTintAmount, uTime;
     uniform vec3 uTint;
     varying vec2 vUv;
     void main() {
@@ -70,8 +71,11 @@ const FinishShader = {
       } else {
         col = texture2D(tDiffuse, vUv).rgb;
       }
-      if (uAberration > 0.0005) {
-        vec2 off = c * uAberration * (0.4 + r);
+      // uAberration is uniform (impacts, speed); uAberrationEdge only bites towards the borders.
+      float edge = smoothstep(0.42, 1.0, r) * (0.35 + 0.65 * pow(smoothstep(0.3, 1.0, r), 1.5));
+      float amount = uAberration * (0.4 + r) + uAberrationEdge * edge;
+      if (amount > 0.0005) {
+        vec2 off = c * amount;
         col.r = mix(col.r, texture2D(tDiffuse, vUv + off).r, 0.85);
         col.b = mix(col.b, texture2D(tDiffuse, vUv - off).b, 0.85);
       }
@@ -90,7 +94,7 @@ const FinishShader = {
  */
 export class Renderer {
   readonly gl: THREE.WebGLRenderer
-  readonly post = { aberration: 0, zoom: 0, vignette: 0.35, tint: new THREE.Color(0, 0, 0), tintAmount: 0 }
+  readonly post = { aberration: 0, aberrationEdge: 0, zoom: 0, vignette: 0.35, tint: new THREE.Color(0, 0, 0), tintAmount: 0 }
   bloomStrength = 0.9
   private composer?: EffectComposer
   private bloom?: UnrealBloomPass
@@ -176,6 +180,7 @@ export class Renderer {
     if (this.finish) {
       const u = this.finish.uniforms
       u.uAberration.value = this.post.aberration
+      u.uAberrationEdge.value = this.post.aberrationEdge
       u.uZoom.value = this.post.zoom
       u.uVignette.value = this.post.vignette
       ;(u.uTint.value as THREE.Color).copy(this.post.tint)

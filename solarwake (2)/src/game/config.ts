@@ -49,6 +49,8 @@ export const DEFAULT_CONFIG = {
     rockSmall: 40,
     rockLarge: 150,
     mine: 120,
+    kestrel: 220,
+    shard: 140,
     chunk: 60,
     graze: 10,
     grinder: 4000,
@@ -60,6 +62,16 @@ export const DEFAULT_CONFIG = {
   },
   repair: { hull: 22, shield: 30 },
   rail: { speed: 38, boost: 64, boss: 30 },
+  /**
+   * Per-stage extras. `clearBonus` is the end-of-stage payout that replaces the boss kill on
+   * stages which end with a gauntlet instead of a boss (see rules.win).
+   */
+  stages: {
+    ring: { clearBonus: 10000 },
+    orbit: { clearBonus: 34000 },
+    /** Endless: there is no clear, so the payout is never granted (kept for a uniform shape). */
+    loop: { clearBonus: 0 },
+  },
   aim: {
     /** Distance of the aim point when nothing is under the reticle. */
     depth: 90,

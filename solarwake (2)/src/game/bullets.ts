@@ -210,38 +210,104 @@ export class EnemyBullets {
 
 const WHITE = new THREE.Color('#ffffff')
 
-export type Shot = { pos: THREE.Vector3; prev: THREE.Vector3; vel: THREE.Vector3; life: number; damage: number }
+/** Projectile shape: rods stretch along their velocity, orbs stay round. */
+export type ShotKind = 'bolt' | 'pellet' | 'lance' | 'missile' | 'slug'
 
-/** Player bolts: stretched gold tracers with glow heads; hits are resolved by the scene. */
+export type Shot = {
+  pos: THREE.Vector3
+  prev: THREE.Vector3
+  vel: THREE.Vector3
+  life: number
+  damage: number
+  /** Enemies this projectile can still pass through. */
+  pierce: number
+  /** Steering towards the nearest hostile (radians/s). */
+  homing: number
+  /** Blast radius on impact (0 = none). */
+  splash: number
+  splashtRatio: number
+  size: number
+  kind: ShotKind
+  color: THREE.Color
+  glow: THREE.Color
+}
+
+/** Trigger data the shot needs (the rest of `WeaponStats` is the game's business). */
+export type ShotSpec = {
+  damage: number
+  life: number
+  pierce: number
+  homing: number
+  splash: number
+  splashRatio: number
+  size: number
+  kind: ShotKind
+  color: string
+  glow: string
+}
+
+/**
+ * Player projectiles in rig space. One instanced draw call per shape family (rods, orbs, glow)
+ * regardless of count, so a five-weapon arsenal costs the same three batches the old single
+ * weapon did. Behaviour (pierce, homing, splash) lives on the shot and is resolved by the scene,
+ * which owns the physics queries.
+ */
 export class PlayerShots {
   readonly group = new THREE.Group()
-  readonly pool = new ObjectPool<Shot>(() => ({ pos: new THREE.Vector3(), prev: new THREE.Vector3(), vel: new THREE.Vector3(), life: 0, damage: 1 }), 240, 240)
-  private readonly bolt: InstancedBatch
+  readonly pool = new ObjectPool<Shot>(
+    () => ({
+      pos: new THREE.Vector3(), prev: new THREE.Vector3(), vel: new THREE.Vector3(),
+      life: 0, damage: 1, pierce: 0, homing: 0, splash: 0, splashtRatio: 0, size: 0.16,
+      kind: 'bolt' as ShotKind, color: new THREE.Color(), glow: new THREE.Color(),
+    }),
+    320,
+    320,
+  )
+  private readonly rod: InstancedBatch
+  private readonly orb: InstancedBatch
   private readonly glow: InstancedBatch
   private readonly q = new THREE.Quaternion()
   private readonly s = new THREE.Vector3()
-  private readonly z = new THREE.Vector3(0, 0, 1)
   private readonly d = new THREE.Vector3()
+  private readonly dir = new THREE.Vector3()
+  private readonly up = new THREE.Vector3()
+  private readonly axis = new THREE.Vector3()
+  private readonly z = new THREE.Vector3(0, 0, 1)
   readonly camQuat = new THREE.Quaternion()
 
   constructor() {
-    const boltMat = new THREE.MeshBasicMaterial({ color: '#ffe3a0', toneMapped: false, fog: false, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false })
-    this.bolt = new InstancedBatch(new THREE.BoxGeometry(1, 1, 1), boltMat, 240)
-    const glowMat = new THREE.MeshBasicMaterial({ map: glowTexture(), color: '#ff9a3a', blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, toneMapped: false, fog: false })
-    this.glow = new InstancedBatch(new THREE.PlaneGeometry(1, 1), glowMat, 240)
-    this.bolt.mesh.renderOrder = 7
+    const rodMat = new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false, fog: false, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false })
+    this.rod = new InstancedBatch(new THREE.BoxGeometry(1, 1, 1), rodMat, 320, { colors: true })
+    const orbMat = new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false, fog: false })
+    this.orb = new InstancedBatch(new THREE.IcosahedronGeometry(1, 1), orbMat, 320, { colors: true })
+    const glowMat = new THREE.MeshBasicMaterial({ map: glowTexture(), color: '#ffffff', blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, toneMapped: false, fog: false })
+    this.glow = new InstancedBatch(new THREE.PlaneGeometry(1, 1), glowMat, 320, { colors: true })
+    this.rod.mesh.renderOrder = 7
+    this.orb.mesh.renderOrder = 7
     this.glow.mesh.renderOrder = 8
-    this.group.add(this.bolt.mesh, this.glow.mesh)
+    this.group.add(this.rod.mesh, this.orb.mesh, this.glow.mesh)
   }
 
-  fire(from: THREE.Vector3, dir: THREE.Vector3, speed: number, life: number, damage: number): Shot | undefined {
+  get count(): number {
+    return this.pool.size
+  }
+
+  fire(from: THREE.Vector3, dir: THREE.Vector3, speed: number, spec: ShotSpec): Shot | undefined {
     const s = this.pool.acquire()
     if (!s) return undefined
     s.pos.copy(from)
     s.prev.copy(from)
-    s.vel.copy(dir).multiplyScalar(speed)
-    s.life = life
-    s.damage = damage
+    s.vel.copy(dir).normalize().multiplyScalar(speed)
+    s.life = spec.life
+    s.damage = spec.damage
+    s.pierce = spec.pierce
+    s.homing = spec.homing
+    s.splash = spec.splash
+    s.splashtRatio = spec.splashRatio
+    s.size = spec.size
+    s.kind = spec.kind
+    s.color.set(spec.color)
+    s.glow.set(spec.glow)
     return s
   }
 
@@ -249,17 +315,70 @@ export class PlayerShots {
     this.pool.releaseAll()
   }
 
+  /**
+   * Integrate one projectile. Homing steers the velocity towards `target` (rig space) with a
+   * capped turn rate, so seekers curve instead of snapping; the rail slug and bolts are unaffected.
+   */
+  advance(s: Shot, dt: number, target: THREE.Vector3 | null): void {
+    s.prev.copy(s.pos)
+    if (s.homing > 0 && target) {
+      this.dir.copy(target).sub(s.pos)
+      const dist = this.dir.length()
+      if (dist > 0.5) {
+        this.dir.divideScalar(dist)
+        this.up.copy(s.vel).normalize()
+        const angle = Math.acos(THREE.MathUtils.clamp(this.up.dot(this.dir), -1, 1))
+        const step = Math.min(angle, s.homing * dt)
+        // Rotate the velocity around the axis perpendicular to both, by `step`.
+        this.axis.crossVectors(this.up, this.dir)
+        if (this.axis.lengthSq() > 1e-8) {
+          this.axis.normalize()
+          s.vel.applyAxisAngle(this.axis, step)
+        } else {
+          s.vel.copy(this.dir).multiplyScalar(s.vel.length())
+        }
+      }
+    }
+    s.pos.addScaledVector(s.vel, dt)
+    s.life -= dt
+  }
+
+  /** A projectile punched through: skip it past the impact so it cannot hit the same hull twice. */
+  skip(s: Shot, distance: number): void {
+    this.dir.copy(s.vel).normalize()
+    s.pos.addScaledVector(this.dir, distance)
+    s.prev.copy(s.pos)
+  }
+
   render(alpha: number): void {
-    this.bolt.begin()
+    this.rod.begin()
+    this.orb.begin()
     this.glow.begin()
     for (const s of this.pool.active) {
       this.d.lerpVectors(s.prev, s.pos, alpha)
-      this.q.setFromUnitVectors(this.z, this.s.copy(s.vel).normalize())
-      this.s.set(0.16, 0.16, 4.2)
-      this.bolt.push(this.d, this.q, this.s)
-      this.glow.push(this.d, this.camQuat, 1.5)
+      this.q.setFromUnitVectors(this.z, this.dir.copy(s.vel).normalize())
+      switch (s.kind) {
+        case 'lance':
+          this.s.set(s.size * 0.5, s.size * 0.5, s.size * 46)
+          break
+        case 'slug':
+          this.s.set(s.size, s.size, s.size * 9)
+          break
+        case 'pellet':
+          this.s.setScalar(s.size * 0.85)
+          break
+        case 'missile':
+          this.s.set(s.size * 1.15, s.size * 1.15, s.size * 2.2)
+          break
+        default:
+          this.s.set(s.size, s.size, s.size * 26)
+      }
+      if (s.kind === 'pellet' || s.kind === 'missile') this.orb.push(this.d, this.q, this.s, s.color)
+      else this.rod.push(this.d, this.q, this.s, s.color)
+      this.glow.push(this.d, this.camQuat, s.size * (s.kind === 'slug' ? 26 : 13), s.glow)
     }
-    this.bolt.end()
+    this.rod.end()
+    this.orb.end()
     this.glow.end()
   }
 }

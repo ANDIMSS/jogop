@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { CONFIG } from './config'
-import { buildHeliospur } from './models'
+import { DEFAULT_SHIP, shipSpec, type ShipId, type ShipSpec } from './arsenal'
+import { buildShip } from './models'
 import { glowTexture } from './textures'
 
 const TRAIL = 14
@@ -9,16 +10,13 @@ class Trail {
   readonly mesh: THREE.Mesh
   private readonly pts: THREE.Vector3[] = []
   private readonly geo = new THREE.BufferGeometry()
+  private readonly colors: Float32Array
   constructor(color: string) {
     for (let i = 0; i < TRAIL; i += 1) this.pts.push(new THREE.Vector3())
     this.geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL * 2 * 3), 3).setUsage(THREE.DynamicDrawUsage))
-    const col = new Float32Array(TRAIL * 2 * 3)
-    const c = new THREE.Color(color)
-    for (let i = 0; i < TRAIL; i += 1) {
-      const f = Math.pow(1 - i / (TRAIL - 1), 1.6)
-      col.set([c.r * f, c.g * f, c.b * f, c.r * f, c.g * f, c.b * f], i * 6)
-    }
-    this.geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
+    this.colors = new Float32Array(TRAIL * 2 * 3)
+    this.geo.setAttribute('color', new THREE.BufferAttribute(this.colors, 3))
+    this.setColor(color)
     const idx: number[] = []
     for (let i = 0; i < TRAIL - 1; i += 1) {
       const a = i * 2
@@ -28,6 +26,17 @@ class Trail {
     this.mesh = new THREE.Mesh(this.geo, new THREE.MeshBasicMaterial({ vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false, fog: false }))
     this.mesh.frustumCulled = false
   }
+  /** Re-tint the ribbon in place (a new hull re-colours its trails without new geometry). */
+  setColor(color: string): void {
+    const c = new THREE.Color(color)
+    for (let i = 0; i < TRAIL; i += 1) {
+      const f = Math.pow(1 - i / (TRAIL - 1), 1.6)
+      this.colors.set([c.r * f, c.g * f, c.b * f, c.r * f, c.g * f, c.b * f], i * 6)
+    }
+    const attr = this.geo.getAttribute('color')
+    if (attr) attr.needsUpdate = true
+  }
+
   reset(p: THREE.Vector3): void {
     for (const q of this.pts) q.copy(p)
   }
@@ -83,14 +92,20 @@ export class Ship {
   thrust = 0
   /** Visual yaw/pitch toward the reticle target. */
   readonly aimDir = new THREE.Vector3(0, 0, -1)
+  /** The hull currently flown: hull/shield maxima, steering and colours all come from it. */
+  private spec: ShipSpec = shipSpec(DEFAULT_SHIP)
+  private readonly bodyMesh: THREE.Mesh
+  private readonly glowMesh: THREE.Mesh
+  private readonly flameMat: THREE.MeshBasicMaterial
 
   constructor() {
-    const parts = buildHeliospur()
+    const parts = buildShip(this.spec.id)
     this.bodyMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.42, metalness: 0.25, emissive: '#000000' })
-    const body = new THREE.Mesh(parts.body, this.bodyMat)
-    const glow = new THREE.Mesh(parts.glow, new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }))
-    this.model.add(body, glow)
-    const flameMat = new THREE.MeshBasicMaterial({ color: '#4fc8ff', blending: THREE.AdditiveBlending, transparent: true, opacity: 0.75, depthWrite: false, toneMapped: false })
+    this.bodyMesh = new THREE.Mesh(parts.body, this.bodyMat)
+    this.glowMesh = new THREE.Mesh(parts.glow, new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }))
+    this.model.add(this.bodyMesh, this.glowMesh)
+    this.flameMat = new THREE.MeshBasicMaterial({ color: '#4fc8ff', blending: THREE.AdditiveBlending, transparent: true, opacity: 0.75, depthWrite: false, toneMapped: false })
+    const flameMat = this.flameMat
     for (const x of [-0.55, 0.55, 0]) {
       const f = new THREE.Mesh(new THREE.ConeGeometry(x === 0 ? 0.2 : 0.17, 1, 6, 1, true), flameMat)
       f.geometry.translate(0, -0.5, 0)
@@ -109,8 +124,45 @@ export class Ship {
     )
     this.shieldMesh.scale.set(1.45, 0.75, 1.2)
     this.group.add(this.model, this.shieldMesh)
-    this.trails = [new Trail('#7ff6ff'), new Trail('#ffb070')]
-    this.model.scale.setScalar(0.95)
+    this.trails = [new Trail(this.spec.trail[0]), new Trail(this.spec.trail[1])]
+    this.model.scale.setScalar(this.spec.scale)
+  }
+
+  /** Switch hulls: rebuilds the geometry, re-tints engines and trails, applies the new handling. */
+  configure(id: ShipId): void {
+    this.spec = shipSpec(id)
+    const parts = buildShip(id)
+    this.bodyMesh.geometry.dispose()
+    this.glowMesh.geometry.dispose()
+    this.bodyMesh.geometry = parts.body
+    this.glowMesh.geometry = parts.glow
+    this.model.scale.setScalar(this.spec.scale)
+    this.flameMat.color.set(this.spec.flame)
+    ;(this.flameGlow.material as THREE.SpriteMaterial).color.set(this.spec.flame)
+    this.trails[0].setColor(this.spec.trail[0])
+    this.trails[1].setColor(this.spec.trail[1])
+  }
+
+  get hullId(): ShipId {
+    return this.spec.id
+  }
+
+  /** Hull and shield the run starts with (read by the rules through `shipRules`). */
+  get hitRadius(): number {
+    return this.spec.hitRadius
+  }
+
+  get grazeRadius(): number {
+    return this.spec.grazeRadius
+  }
+
+  get speed(): number {
+    return this.spec.speed
+  }
+
+  /** Full roll cycle for this hull (dash + cooldown), used by the HUD pip. */
+  get rollCycle(): number {
+    return CONFIG.roll.duration + this.spec.rollCooldown
   }
 
   /** Trails live beside the ship group (not inside it) so they are not rotated with the model. */
@@ -140,7 +192,7 @@ export class Ship {
     if (!this.alive || this.rollCooldown > 0) return false
     this.rollDir = dirX !== 0 ? Math.sign(dirX) : this.vel.x !== 0 ? Math.sign(this.vel.x) : 1
     this.rollTime = CONFIG.roll.duration
-    this.rollCooldown = CONFIG.roll.duration + CONFIG.roll.cooldown
+    this.rollCooldown = CONFIG.roll.duration + this.spec.rollCooldown
     return true
   }
 
@@ -151,22 +203,23 @@ export class Ship {
   step(dt: number, move: { x: number; y: number }, follow: THREE.Vector3 | null, speedScale: number, railSpeed: number): void {
     this.prev.copy(this.pos)
     const c = CONFIG.ship
+    const speed = this.spec.speed
+    const accel = this.spec.accel * dt
     if (this.alive) {
       if (follow) {
-        const k = 1 - Math.exp(-c.followRate * dt)
+        const k = 1 - Math.exp(-this.spec.followRate * dt)
         const tx = THREE.MathUtils.clamp(follow.x, -c.boundsX, c.boundsX)
         const ty = THREE.MathUtils.clamp(follow.y, -c.boundsY, c.boundsY)
         const dvx = ((tx - this.pos.x) * k) / dt
         const dvy = ((ty - this.pos.y) * k) / dt
-        const max = c.speed * 1.35
+        const max = speed * 1.35
         this.vel.x = THREE.MathUtils.clamp(dvx, -max, max)
         this.vel.y = THREE.MathUtils.clamp(dvy, -max, max)
       } else {
-        const tx = move.x * c.speed * speedScale
-        const ty = move.y * c.speed * speedScale
-        const a = c.accel * dt
-        this.vel.x += THREE.MathUtils.clamp(tx - this.vel.x, -a, a)
-        this.vel.y += THREE.MathUtils.clamp(ty - this.vel.y, -a, a)
+        const tx = move.x * speed * speedScale
+        const ty = move.y * speed * speedScale
+        this.vel.x += THREE.MathUtils.clamp(tx - this.vel.x, -accel, accel)
+        this.vel.y += THREE.MathUtils.clamp(ty - this.vel.y, -accel, accel)
       }
       if (this.rollTime > 0) {
         const t = this.rollTime / CONFIG.roll.duration
@@ -195,7 +248,7 @@ export class Ship {
   }
 
   private tipWorld(side: number, out: THREE.Vector3): THREE.Vector3 {
-    out.set(2.72 * side * 0.95, -0.46 * 0.95, -0.6).applyQuaternion(this.model.quaternion)
+    out.set(2.72 * side * this.spec.scale, -0.46 * this.spec.scale, -0.6).applyQuaternion(this.model.quaternion)
     return out.add(this.pos)
   }
 
@@ -249,9 +302,9 @@ export class Ship {
     for (const t of this.trails) t.mesh.visible = this.alive
   }
 
-  /** Gun muzzle positions in rig space. */
+  /** Gun muzzle positions in rig space, offset by the hull's own gun spacing. */
   muzzle(side: number, out: THREE.Vector3): THREE.Vector3 {
-    return out.set(CONFIG.weapon.gunOffset * side, -0.3, -1.4).applyQuaternion(this.model.quaternion).add(this.pos)
+    return out.set(this.spec.gunOffset * side * this.spec.scale, -0.3 * this.spec.scale, -1.4).applyQuaternion(this.model.quaternion).add(this.pos)
   }
 
   get position(): THREE.Vector3 {

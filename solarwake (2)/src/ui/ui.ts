@@ -4,17 +4,28 @@ import type { Input } from '../engine/input'
 import { insertScore, type Locale, type Quality, type SaveData, type SaveStore } from '../engine/save'
 import type { BannerStyle, HudData, PopupKind } from '../game/game'
 import { accuracy, formatClock, type Grade, type RunState } from '../game/rules'
+import { STAGES, stageInfo, type StageId } from '../game/stages'
+import {
+  MAX_LEVEL, SHIP_IDS, WEAPON_IDS, loadoutOf, nextWeaponCost, ownsShip, shipSpec, weaponDef,
+  weaponLevel, weaponStats, type ShipId,
+} from '../game/arsenal'
 
-export type Screen = 'boot' | 'title' | 'hud' | 'pause' | 'settings' | 'leaderboard' | 'results'
+export type Screen = 'boot' | 'title' | 'hud' | 'pause' | 'settings' | 'leaderboard' | 'results' | 'stages' | 'hangar'
 
 export type UiActions = {
-  play(): void
+  /** Launch the selected mission, or the one named by `stage`. */
+  play(stage?: string): void
   resume(): void
   restart(): void
   checkpoint(): void
   quit(): void
   settings(patch: Partial<SaveData>): void
+  /** Hangar purchase: buy or upgrade a weapon, or buy a hull. Applied to the save by the caller. */
+  shop(kind: 'weapon' | 'ship', id: string): void
 }
+
+/** Fired when the hangar wants a hull on the turntable, and with `null` when it closes. */
+export type PreviewHook = (id: string | null) => void
 
 const ICON = {
   pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="5" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="5" height="16" rx="1" fill="currentColor"/></svg>',
@@ -59,7 +70,13 @@ export class Ui {
   private lastGrade: Grade = 'D'
   private savedRank = -1
   private lastMethod = ''
+  private lastStage: StageId = 'ring'
   private checkpointRun = false
+  /** Set by the bootstrap: shows a hull in the hangar's 3D preview (three stays out of this file). */
+  onHangarPreview: PreviewHook | null = null
+  private hangarTab: 'weapons' | 'ships' = 'weapons'
+  /** Hull on the turntable; null follows whatever is equipped. */
+  private previewShip: ShipId | null = null
   private readonly el: Record<string, HTMLElement> = {}
 
   constructor(
@@ -110,11 +127,19 @@ export class Ui {
     }
     this.root.dataset.activeScreen = screen
     if (screen === 'title') this.renderBest()
+    if (screen === 'stages') this.renderStages()
+    if (screen === 'hangar') this.renderHangar()
+    if (screen === 'hangar' && this.hangarTab === 'ships') this.onHangarPreview?.(this.previewShip ?? loadoutOf(this.save.data).ship)
+    else this.onHangarPreview?.(null)
     if (screen === 'leaderboard') this.renderLeaderboard()
     requestAnimationFrame(() => {
+      // Never steal focus from something the player already reached on this screen (a purchase can
+      // land inside the same frame, and throttled frames can arrive much later than that).
+      const held = document.activeElement as HTMLElement | null
+      if (held && held !== (document.body as HTMLElement) && held.closest('[data-screen]')?.classList.contains('is-active')) return
       const first = this.navItems()[0]
       if (first && this.input.method !== 'touch') first.focus({ preventScroll: true })
-      else (document.activeElement as HTMLElement | null)?.blur?.()
+      else held?.blur?.()
     })
   }
 
@@ -139,6 +164,10 @@ export class Ui {
     this.el.hullBar.style.transform = `scaleX(${h.hull.toFixed(3)})`
     this.el.shieldBar.style.transform = `scaleX(${h.shield.toFixed(3)})`
     if (this.changed('hullN', Math.ceil(h.hull * 100))) this.el.hullN.textContent = String(Math.ceil(h.hull * 100))
+    if (this.changed('weapon', `${h.weapon.tag}${h.weapon.level}`)) {
+      this.el.weaponTag.textContent = this.i18n.t(h.weapon.tag)
+      this.el.weaponLevel.textContent = `L${h.weapon.level}`
+    }
     if (this.changed('shieldN', Math.ceil(h.shield * 100))) this.el.shieldN.textContent = String(Math.ceil(h.shield * 100))
     this.el.status.classList.toggle('is-low', h.lowHull)
     this.el.status.classList.toggle('shield-down', h.shield <= 0.01)
@@ -261,11 +290,13 @@ export class Ui {
   }
 
   // ─── results ────────────────────────────────────────────────────────────
-  showResults(run: RunState, grade: Grade, info: { checkpoint: boolean; fromCheckpoint: boolean }): void {
+  showResults(run: RunState, grade: Grade, info: { checkpoint: boolean; fromCheckpoint: boolean; stage: string; credits?: number }): void {
     this.lastRun = run
     this.lastGrade = grade
     this.savedRank = -1
     this.checkpointRun = info.fromCheckpoint
+    this.lastStage = stageInfo(info.stage).id
+    this.el.resultsStage.textContent = this.i18n.t(stageInfo(info.stage).nameKey)
     const won = run.phase === 'won'
     const el = this.q('[data-screen="results"]')
     el.classList.toggle('is-won', won)
@@ -286,6 +317,9 @@ export class Ui {
     }
     this.el.resultsTable.innerHTML = rows.map(([k, v], i) => `<div style="--i:${i}"><dt data-i18n="${k}"></dt><dd>${v}</dd></div>`).join('')
     this.el.resultsTotal.textContent = fmt(run.score)
+    const earned = info.credits ?? 0
+    this.el.resultsEarn.textContent = `+${fmt(earned)}`
+    this.el.resultsCredits.classList.toggle('is-empty', earned <= 0)
     const best = this.save.data.leaderboard[0]?.score ?? 0
     const ranked = !info.fromCheckpoint && !run.unranked && run.score > 0
     this.el.resultsBest.classList.toggle('is-active', ranked && run.score > best)
@@ -303,7 +337,7 @@ export class Ui {
 
   private entry(run: RunState) {
     const name = this.q<HTMLInputElement>('.results-name')?.value.trim().slice(0, 16) || this.save.data.playerName
-    return { name, score: run.score, seconds: Math.round(run.elapsed), at: Date.now(), grade: run.phase === 'won' ? this.lastGrade : 'D' }
+    return { name, score: run.score, seconds: Math.round(run.elapsed), at: Date.now(), grade: run.phase === 'won' ? this.lastGrade : 'D', stage: this.lastStage }
   }
 
   private saveScore(): void {
@@ -326,7 +360,7 @@ export class Ui {
       return
     }
     list.innerHTML = board
-      .map((e, i) => `<li class="${i === this.savedRank ? 'is-me' : ''}" style="--i:${i}"><b>${i + 1}</b><span class="board-name"></span><i class="grade-chip" data-grade="${e.grade ?? 'D'}">${e.grade ?? '–'}</i><em>${e.score.toLocaleString('en-US')}</em></li>`)
+      .map((e, i) => `<li class="${i === this.savedRank ? 'is-me' : ''}" style="--i:${i}"><b>${i + 1}</b><span class="board-name"></span><i class="board-tags"><i class="board-stage">${this.i18n.t(stageInfo(e.stage).shortKey)}</i><i class="grade-chip" data-grade="${e.grade ?? 'D'}">${e.grade ?? '–'}</i></i><em>${e.score.toLocaleString('en-US')}</em></li>`)
       .join('')
     list.querySelectorAll('.board-name').forEach((el, i) => (el.textContent = board[i].name))
   }
@@ -336,6 +370,138 @@ export class Ui {
     const el = this.el.titleBest
     el.classList.toggle('is-hidden', best <= 0)
     el.textContent = this.i18n.t('menu.best', { score: best.toLocaleString('en-US') })
+    this.el.titleStage.textContent = `${this.i18n.t('menu.selected')} ${this.i18n.t(stageInfo(this.save.data.stage).nameKey)}`
+    const l = loadoutOf(this.save.data)
+    this.el.titleWallet.textContent = `${this.i18n.t('hangar.credits')} ${this.credits(l.credits)} · ${this.i18n.t(shipSpec(l.ship).nameKey)} · ${this.i18n.t(weaponDef(l.weapon).tagKey)}`
+  }
+
+
+  // ─── hangar ─────────────────────────────────────────────────────────────
+  private credits(v: number): string {
+    return v.toLocaleString('en-US')
+  }
+
+  /** Buy with feedback: a chime when the wallet covers it, a dull blip when it does not. */
+  private buy(kind: 'weapon' | 'ship', id: string): void {
+    const before = this.save.data.credits
+    this.actions.shop(kind, id)
+    this.audio.play(this.save.data.credits < before ? 'buy' : 'denied')
+    // Rebuilding the cards drops focus, so a keyboard/pad player would have to navigate again
+    // after every purchase: put it back on the same card.
+    const refocus = this.input.method !== 'touch'
+    this.renderHangar()
+    if (kind === 'ship') {
+      this.previewShip = id as ShipId
+      this.onHangarPreview?.(id)
+    }
+    if (refocus) this.q<HTMLElement>(`[data-screen="hangar"] [data-action="shop"][data-kind="${kind}"][data-id="${id}"]`)?.focus({ preventScroll: true })
+  }
+
+  private levelPips(level: number): string {
+    let out = '<span class="shop-pips">'
+    for (let i = 1; i <= MAX_LEVEL; i += 1) out += `<i class="${i <= level ? 'is-on' : ''}"></i>`
+    return `${out}</span>`
+  }
+
+  private weaponCard(id: (typeof WEAPON_IDS)[number], l: ReturnType<typeof loadoutOf>): string {
+    const def = weaponDef(id)
+    const level = weaponLevel(l, id)
+    const owned = level > 0
+    const stats = weaponStats(id, Math.max(1, level))
+    const cost = nextWeaponCost(l, id)
+    const equipped = l.weapon === id
+    const affordable = cost !== null && l.credits >= cost
+    const percent = Math.max(0, Math.min(1, stats.damage / 20))
+    const state = equipped ? 'is-equipped' : owned ? 'is-owned' : 'is-locked'
+    const extra = stats.pierce > 0
+      ? `<span><i data-i18n="hangar.stat.pierce"></i><b>${stats.pierce + 1}</b></span>`
+      : stats.homing > 0
+        ? `<span><i data-i18n="hangar.stat.seek"></i><b>${stats.homing.toFixed(1)}</b></span>`
+        : stats.splash > 0
+          ? `<span><i data-i18n="hangar.stat.blast"></i><b>${stats.splash.toFixed(1)}</b></span>`
+          : ''
+    const action = cost === null
+      ? equipped
+        ? `<button data-nav class="btn btn-small is-disabled" disabled><span data-i18n="hangar.action.equipped"></span></button>`
+        : `<button data-nav class="btn btn-small" data-action="shop" data-kind="weapon" data-id="${id}"><span data-i18n="hangar.action.equip"></span></button>`
+      : `<button data-nav class="btn btn-small${affordable ? '' : ' is-poor'}" data-action="shop" data-kind="weapon" data-id="${id}">
+           <span data-i18n="${owned ? 'hangar.action.upgrade' : 'hangar.action.buy'}"></span><em>${this.credits(cost)}</em>
+         </button>`
+    return `<article class="shop-card ${state}" style="--dmg:${percent.toFixed(2)}">
+      <header><b data-i18n="${def.nameKey}"></b><span class="shop-tag" data-i18n="${def.tagKey}"></span></header>
+      <p data-i18n="${def.descKey}"></p>
+      <div class="shop-stats">
+        <span><i data-i18n="hangar.stat.damage"></i><b>${stats.damage.toFixed(1)}</b></span>
+        <span><i data-i18n="hangar.stat.rate"></i><b>${stats.rate.toFixed(1)}</b></span>
+        <span><i data-i18n="hangar.stat.shots"></i><b>${stats.count}</b></span>
+        ${extra}
+      </div>
+      <footer>${this.levelPips(level)}<span class="shop-level"><i data-i18n="hangar.stat.level"></i><b>${level}/${MAX_LEVEL}</b></span></footer>
+      ${action}
+    </article>`
+  }
+
+  private shipCard(id: (typeof SHIP_IDS)[number], l: ReturnType<typeof loadoutOf>): string {
+    const spec = shipSpec(id)
+    const owned = ownsShip(l, id)
+    const equipped = l.ship === id
+    const affordable = l.credits >= spec.price
+    const state = equipped ? 'is-equipped' : owned ? 'is-owned' : 'is-locked'
+    const action = !owned
+      ? `<button data-nav class="btn btn-small${affordable ? '' : ' is-poor'}" data-action="shop" data-kind="ship" data-id="${id}">
+           <span data-i18n="hangar.action.buy"></span><em>${this.credits(spec.price)}</em>
+         </button>`
+      : equipped
+        ? `<button data-nav class="btn btn-small is-disabled" disabled><span data-i18n="hangar.action.equipped"></span></button>`
+        : `<button data-nav class="btn btn-small" data-action="shop" data-kind="ship" data-id="${id}"><span data-i18n="hangar.action.equip"></span></button>`
+    const bar = (key: string, value: number, max: number, text: string) =>
+      `<span class="ship-stat"><i data-i18n="hangar.stat.${key}"></i><b><em style="width:${Math.round(Math.min(1, value / max) * 100)}%"></em></b><u>${text}</u></span>`
+    return `<article class="shop-card ship-card ${state}">
+      <header><b data-i18n="${spec.nameKey}"></b><span class="shop-tag" data-i18n="${spec.tagKey}"></span></header>
+      <p data-i18n="${spec.descKey}"></p>
+      <div class="ship-stats">
+        ${bar('hull', spec.hull, 180, String(spec.hull))}
+        ${bar('shield', spec.shield, 120, String(spec.shield))}
+        ${bar('speed', spec.speed, 22, spec.speed.toFixed(1))}
+        ${bar('graze', spec.grazeRadius, 2.1, spec.grazeRadius.toFixed(2))}
+      </div>
+      ${action}
+    </article>`
+  }
+
+  /** Hangar: weapons on one tab, hulls on the other, one wallet for both. */
+  private renderHangar(): void {
+    const l = loadoutOf(this.save.data)
+    this.el.wallet.textContent = this.credits(l.credits)
+    for (const tab of this.qa<HTMLElement>('.hangar-tabs .tab')) {
+      tab.classList.toggle('is-active', tab.dataset.tab === this.hangarTab)
+      tab.setAttribute('aria-pressed', String(tab.dataset.tab === this.hangarTab))
+    }
+    this.el.hangarWeapons.classList.toggle('is-hidden', this.hangarTab !== 'weapons')
+    this.el.hangarShips.classList.toggle('is-hidden', this.hangarTab !== 'ships')
+    this.el.weaponList.innerHTML = WEAPON_IDS.map(id => this.weaponCard(id, l)).join('')
+    this.el.shipList.innerHTML = SHIP_IDS.map(id => this.shipCard(id, l)).join('')
+    this.el.previewName.textContent = this.i18n.t(shipSpec(this.previewShip ?? l.ship).nameKey)
+    // Translate just the new nodes: a full translate() would re-enter this method.
+    for (const el of this.root.querySelectorAll<HTMLElement>('[data-screen="hangar"] [data-i18n]')) el.textContent = this.i18n.t(el.dataset.i18n!)
+  }
+
+  /** Mission select: one card per stage with that stage's best score. */
+  private renderStages(): void {
+    const board = this.save.data.leaderboard
+    this.el.stageList.innerHTML = STAGES.map(s => {
+      const best = board.reduce((m, e) => (stageInfo(e.stage).id === s.id ? Math.max(m, e.score) : m), 0)
+      const current = stageInfo(this.save.data.stage).id === s.id
+      return `<button data-nav class="stage-card${current ? ' is-current' : ''}" data-action="play" data-stage="${s.id}">
+        <span class="stage-tag" data-i18n="${s.tagKey}"></span>
+        <b data-i18n="${s.nameKey}"></b>
+        <i data-i18n="${s.descKey}"></i>
+        <em>${best > 0 ? this.i18n.t('menu.best', { score: best.toLocaleString('en-US') }) : this.i18n.t('menu.noRecord')}</em>
+        <span class="stage-go" data-i18n="${current ? 'menu.resumeStage' : 'menu.deploy'}"></span>
+      </button>`
+    }).join('')
+    // Translate just the new cards: a full translate() would re-enter renderStages().
+    for (const el of this.el.stageList.querySelectorAll<HTMLElement>('[data-i18n]')) el.textContent = this.i18n.t(el.dataset.i18n!)
   }
 
   // ─── settings ───────────────────────────────────────────────────────────
@@ -387,7 +553,15 @@ export class Ui {
     const action = target.dataset.action
     if (action && action !== 'pause') this.audio.play('uiConfirm')
     switch (action) {
-      case 'play': this.actions.play(); break
+      case 'play': this.actions.play(target.dataset.stage); break
+      case 'stages': this.push('stages'); break
+      case 'hangar': this.push('hangar'); break
+      case 'hangar-tab':
+        this.hangarTab = target.dataset.tab === 'ships' ? 'ships' : 'weapons'
+        this.renderHangar()
+        this.onHangarPreview?.(this.hangarTab === 'ships' ? this.previewShip ?? loadoutOf(this.save.data).ship : null)
+        break
+      case 'shop': this.buy(target.dataset.kind === 'ship' ? 'ship' : 'weapon', target.dataset.id ?? ''); break
       case 'resume': this.actions.resume(); break
       case 'restart': this.actions.restart(); break
       case 'checkpoint': this.actions.checkpoint(); break
@@ -496,7 +670,9 @@ export class Ui {
     this.renderHint()
     this.renderControls()
     if (this.screen === 'title') this.renderBest()
+    if (this.screen === 'stages') this.renderStages()
     if (this.screen === 'leaderboard') this.renderLeaderboard()
+    if (this.screen === 'hangar') this.renderHangar()
     this.cache.delete('bossPhase')
     document.title = `${this.i18n.t('game.title')} · ${this.i18n.t('game.subtitle')}`
   }
@@ -552,14 +728,18 @@ export class Ui {
 <section class="screen screen-title" data-screen="title">
   <div class="title-vignette"></div>
   <div class="title-best is-hidden" data-el="titleBest"></div>
+  <div class="title-wallet" data-el="titleWallet"></div>
   <div class="title-block">
     <div class="logo">
       <h1 class="logo-text" data-el="logo" data-i18n="game.title"></h1>
       <div class="logo-sub"><span data-i18n="game.subtitle"></span></div>
     </div>
     <p class="tagline" data-i18n="game.tagline"></p>
+    <div class="title-stage" data-el="titleStage"></div>
     <nav class="menu">
       <button data-nav class="btn btn-primary" data-action="play"><span data-i18n="menu.play"></span></button>
+      <button data-nav class="btn" data-action="stages"><span data-i18n="menu.stages"></span></button>
+      <button data-nav class="btn" data-action="hangar"><span data-i18n="menu.hangar"></span></button>
       <button data-nav class="btn" data-action="leaderboard"><span data-i18n="menu.leaderboard"></span></button>
       <button data-nav class="btn" data-action="settings"><span data-i18n="menu.settings"></span></button>
     </nav>
@@ -598,6 +778,7 @@ export class Ui {
     <div class="bar-row shield"><span class="hud-label" data-i18n="hud.shield"></span><div class="bar"><i data-el="shieldBar"></i></div><b data-el="shieldN">100</b></div>
     <div class="bar-row hull"><span class="hud-label" data-i18n="hud.hull"></span><div class="bar"><i data-el="hullBar"></i></div><b data-el="hullN">100</b></div>
     <div class="roll-pip" data-el="rollPip"><span data-i18n="hud.roll"></span></div>
+    <div class="hud-weapon" data-el="weaponChip"><b data-el="weaponTag"></b><i data-el="weaponLevel"></i></div>
     <div class="low-hull" data-i18n="hud.lowHull"></div>
   </div>
   <div class="banner" data-el="banner"><div class="banner-title" data-el="bannerTitle"></div><div class="banner-sub" data-el="bannerSub"></div></div>
@@ -651,6 +832,38 @@ export class Ui {
   <footer class="bottom-bar"><div class="prompts"></div></footer>
 </section>
 
+<section class="screen screen-stages screen-modal" data-screen="stages">
+  <div class="modal modal-wide">
+    <h2 class="modal-title" data-i18n="menu.stages"></h2>
+    <div class="stage-list" data-el="stageList"></div>
+    <nav class="menu menu-row"><button data-nav class="btn" data-action="back"><span data-i18n="menu.back"></span></button></nav>
+  </div>
+  <footer class="bottom-bar"><div class="prompts"></div></footer>
+</section>
+
+<section class="screen screen-hangar screen-modal" data-screen="hangar">
+  <div class="modal modal-wide modal-hangar">
+    <header class="hangar-head">
+      <h2 class="modal-title" data-i18n="hangar.title"></h2>
+      <div class="hangar-wallet"><span data-i18n="hangar.credits"></span><b data-el="wallet">0</b></div>
+    </header>
+    <div class="hangar-tabs">
+      <button data-nav class="tab is-active" data-action="hangar-tab" data-tab="weapons" data-i18n="hangar.weapons"></button>
+      <button data-nav class="tab" data-action="hangar-tab" data-tab="ships" data-i18n="hangar.ships"></button>
+    </div>
+    <div class="hangar-panel" data-el="hangarWeapons"><div class="shop-list" data-el="weaponList"></div></div>
+    <div class="hangar-panel is-hidden" data-el="hangarShips">
+      <div class="shop-preview">
+        <canvas class="preview-canvas" data-el="preview" width="520" height="300"></canvas>
+        <div class="preview-name" data-el="previewName"></div>
+      </div>
+      <div class="shop-list shop-ships" data-el="shipList"></div>
+    </div>
+    <nav class="menu menu-row"><button data-nav class="btn" data-action="back"><span data-i18n="menu.back"></span></button></nav>
+  </div>
+  <footer class="bottom-bar"><div class="prompts"></div></footer>
+</section>
+
 <section class="screen screen-leaderboard screen-modal" data-screen="leaderboard">
   <div class="modal">
     <h2 class="modal-title" data-i18n="leaderboard.title"></h2>
@@ -664,11 +877,13 @@ export class Ui {
 <section class="screen screen-results screen-modal" data-screen="results">
   <div class="modal modal-results">
     <h2 class="results-title modal-title" data-el="resultsTitle"></h2>
+    <div class="results-stage" data-el="resultsStage"></div>
     <div class="results-main">
       <div class="grade-badge" data-el="gradeBadge"><small data-i18n="results.grade"></small><b data-el="gradeLetter">S</b></div>
       <dl class="results-table" data-el="resultsTable"></dl>
     </div>
     <div class="results-total"><span data-i18n="results.total"></span><b data-el="resultsTotal">0</b></div>
+    <div class="results-credits" data-el="resultsCredits"><span data-i18n="results.credits"></span><b data-el="resultsEarn">0</b></div>
     <div class="results-best" data-el="resultsBest" data-i18n="results.newBest"></div>
     <div class="results-save" data-el="resultsSave">
       <input data-nav class="results-name" type="text" maxlength="16" autocomplete="off" spellcheck="false" data-i18n-placeholder="results.name">
@@ -680,6 +895,7 @@ export class Ui {
     <nav class="menu menu-row">
       <button data-nav class="btn btn-primary" data-action="restart"><span data-i18n="results.retry"></span></button>
       <button data-nav class="btn is-hidden" data-el="retryBoss" data-action="checkpoint"><span data-i18n="menu.checkpoint"></span></button>
+      <button data-nav class="btn" data-action="hangar"><span data-i18n="menu.hangar"></span></button>
       <button data-nav class="btn" data-action="quit"><span data-i18n="results.title"></span></button>
     </nav>
   </div>

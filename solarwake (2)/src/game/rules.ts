@@ -144,14 +144,16 @@ export function shotHit(s: RunState): RunState {
 }
 
 /** Grant temporary invulnerability (rolls, cinematics) without other side effects. */
-export function shield(s: RunState, seconds: number): RunState {
+export function shield(s: RunState, seconds: number, _rules = CONFIG): RunState {
   return { ...s, invulnerable: Math.max(s.invulnerable, seconds) }
 }
 
-/** The boss fell: add clear, hull and flawless bonuses and end the run. */
-export function win(s: RunState, rules = CONFIG): RunState {
+/**
+ * The stage is won: add clear, hull and flawless bonuses and end the run. `clearBonus` defaults to
+ * the shared clear payout; stages that end without a boss pass their own figure instead.
+ */
+export function win(s: RunState, rules = CONFIG, clearBonus: number = rules.score.clear): RunState {
   if (s.phase !== 'playing') return s
-  const clearBonus = rules.score.clear
   const hullBonus = Math.round(s.hull) * rules.score.hullBonus
   const noDamageBonus = s.damageTaken === 0 ? rules.score.noDamage : 0
   return { ...s, phase: 'won', clearBonus, hullBonus, noDamageBonus, score: s.score + clearBonus + hullBonus + noDamageBonus }
