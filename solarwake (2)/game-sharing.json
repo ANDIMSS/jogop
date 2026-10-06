@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "title": "Solarwake",
+  "description": "A 3D on-rails space shooter: pierce a shattered solar ring, survive enemy waves and dismantle a three-phase mining colossus.",
+  "defaultCaptions": {
+    "x": "Solarwake is live: thread the shattered solar ring and bring down the mining colossus.",
+    "facebook": "Fly Solarwake through a shattered solar ring, fight enemy waves and defeat a three-phase mining colossus.",
+    "reddit": "Solarwake \u2014 a 3D on-rails space shooter with enemy waves and a three-phase boss.",
+    "discord": "Solarwake: 3D on-rails space combat, enemy waves and a three-phase boss."
+  },
+  "assets": {
+    "og": "assets/share/solarwake-og.png",
+    "favicon": "assets/share/solarwake-favicon.png"
+  }
+}
