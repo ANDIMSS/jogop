@@ -133,9 +133,13 @@ export class Ui {
     else this.onHangarPreview?.(null)
     if (screen === 'leaderboard') this.renderLeaderboard()
     requestAnimationFrame(() => {
+      // Never steal focus from something the player already reached on this screen (a purchase can
+      // land inside the same frame, and throttled frames can arrive much later than that).
+      const held = document.activeElement as HTMLElement | null
+      if (held && held !== (document.body as HTMLElement) && held.closest('[data-screen]')?.classList.contains('is-active')) return
       const first = this.navItems()[0]
       if (first && this.input.method !== 'touch') first.focus({ preventScroll: true })
-      else (document.activeElement as HTMLElement | null)?.blur?.()
+      else held?.blur?.()
     })
   }
 
@@ -382,11 +386,15 @@ export class Ui {
     const before = this.save.data.credits
     this.actions.shop(kind, id)
     this.audio.play(this.save.data.credits < before ? 'buy' : 'denied')
+    // Rebuilding the cards drops focus, so a keyboard/pad player would have to navigate again
+    // after every purchase: put it back on the same card.
+    const refocus = this.input.method !== 'touch'
     this.renderHangar()
     if (kind === 'ship') {
       this.previewShip = id as ShipId
       this.onHangarPreview?.(id)
     }
+    if (refocus) this.q<HTMLElement>(`[data-screen="hangar"] [data-action="shop"][data-kind="${kind}"][data-id="${id}"]`)?.focus({ preventScroll: true })
   }
 
   private levelPips(level: number): string {

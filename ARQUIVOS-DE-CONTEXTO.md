@@ -301,6 +301,11 @@ de `geometry.setAttribute('color', …)` existir, então `this.geo.getAttribute(
 estourava e o jogo nem subia (`Launch error` na tela) — a ordem foi invertida e o acesso ficou
 guardado.
 
+Dois ajustes de foco saíram desse passe: comprar recria os cartões e o foco caía no `<body>` (agora
+`buy()` devolve o foco ao mesmo cartão de forma síncrona, então três Enters seguidos sobem uma arma
+de L1 a L3) e o `requestAnimationFrame` de `setScreen()` podia roubar o foco de quem já estava na
+tela — agora ele desiste se o foco já está dentro da tela ativa.
+
 Passe de browser (Chromium headless + SwiftShader, 1280×720 e zh-CN): abrir o hangar **só pelo
 teclado**; comprar `scatter` e subir até o nível 3 (carteira 250.000 → 240.500, arma equipada e
 nível 3 no jogo); comprar `kite` (→ 224.000, casco equipado, hull 92 / shield 118 / velocidade 16
