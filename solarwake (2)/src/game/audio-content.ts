@@ -7,6 +7,24 @@ export function defineSounds(a: Audio): void {
     au.tone({ freq: 1250, to: 380, dur: 0.07, type: 'square', vol: 0.045, filter: 3800 })
     au.noise({ dur: 0.04, vol: 0.05, from: 7000, to: 2500, filterType: 'bandpass' })
   }, 0.045)
+  // Each trigger has its own voice: the cloud pops, the lance whines, the pods thump, the slug roars.
+  a.define('shootScatter', au => {
+    au.noise({ dur: 0.11, vol: 0.11, from: 4200, to: 700, filterType: 'bandpass', q: 0.8 })
+    au.tone({ freq: 320, to: 130, dur: 0.1, type: 'square', vol: 0.05, filter: 1600 })
+  }, 0.09)
+  a.define('shootLance', au => {
+    au.tone({ freq: 2100, to: 1500, dur: 0.12, type: 'sine', vol: 0.055 })
+    au.tone({ freq: 4200, to: 2600, dur: 0.07, type: 'triangle', vol: 0.025 })
+  }, 0.05)
+  a.define('shootSwarm', au => {
+    au.noise({ dur: 0.16, vol: 0.07, from: 900, to: 2400, filterType: 'bandpass', q: 2 })
+    au.tone({ freq: 240, to: 520, dur: 0.14, type: 'triangle', vol: 0.05, filter: 2200 })
+  }, 0.08)
+  a.define('shootRail', au => {
+    au.tone({ freq: 180, to: 60, dur: 0.28, type: 'sawtooth', vol: 0.16, filter: 900 })
+    au.noise({ dur: 0.22, vol: 0.14, from: 5200, to: 400 })
+    au.tone({ freq: 70, to: 34, dur: 0.3, type: 'sine', vol: 0.18 })
+  }, 0.12)
   a.define('hit', au => au.tone({ freq: 900 + Math.random() * 200, to: 300, dur: 0.05, type: 'triangle', vol: 0.09 }), 0.03)
   a.define('hitRock', au => au.noise({ dur: 0.06, vol: 0.1, from: 1800, to: 500 }), 0.04)
   a.define('hitBoss', au => {
@@ -83,6 +101,16 @@ export function defineSounds(a: Audio): void {
     au.noise({ dur: 3.2, vol: 0.6, from: 3200, to: 40, echo: 0.7 })
     au.tone({ freq: 60, to: 18, dur: 3.0, type: 'sine', vol: 0.7 })
   }, 2)
+  // Hangar: a bright chime for a purchase, a dull blip when the wallet says no.
+  a.define('buy', au => {
+    au.tone({ freq: 880, dur: 0.08, type: 'triangle', vol: 0.07 })
+    au.tone({ freq: 1320, dur: 0.1, type: 'sine', vol: 0.06, delay: 0.07 })
+    au.tone({ freq: 1760, dur: 0.16, type: 'sine', vol: 0.05, delay: 0.14 })
+  }, 0.05)
+  a.define('denied', au => {
+    au.tone({ freq: 220, to: 160, dur: 0.14, type: 'square', vol: 0.05, filter: 1200 })
+    au.noise({ dur: 0.08, vol: 0.03, from: 900, to: 300 })
+  }, 0.08)
   a.define('ui', au => au.tone({ freq: 700, to: 760, dur: 0.06, type: 'triangle', vol: 0.12 }), 0.04)
   a.define('uiConfirm', au => {
     au.tone({ freq: 660, to: 990, dur: 0.12, type: 'square', vol: 0.08, filter: 3000 })

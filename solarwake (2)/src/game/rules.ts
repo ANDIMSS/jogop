@@ -144,7 +144,7 @@ export function shotHit(s: RunState): RunState {
 }
 
 /** Grant temporary invulnerability (rolls, cinematics) without other side effects. */
-export function shield(s: RunState, seconds: number): RunState {
+export function shield(s: RunState, seconds: number, _rules = CONFIG): RunState {
   return { ...s, invulnerable: Math.max(s.invulnerable, seconds) }
 }
 

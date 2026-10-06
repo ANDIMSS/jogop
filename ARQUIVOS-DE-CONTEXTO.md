@@ -7,11 +7,11 @@ Todas as linhas abaixo foram medidas no checkout atual (`wc -l`), não são esti
 
 | Item | Valor |
 | --- | --- |
-| Arquivos versionados | 68 no git + 8 novos de código/teste + 2 na raiz (§10, §11) |
-| Linhas em `src/` + `scripts/` + `tests/` | 10.300 |
+| Arquivos versionados | 68 no git + 10 novos de código/teste + 2 na raiz (§10, §11, §12) |
+| Linhas em `src/` + `scripts/` + `tests/` | 11.100 |
 | Tamanho do projeto (sem `node_modules`/`dist`/`shots`) | 8,1 MB (2,2 MB só de `public/`, quase tudo fonte CJK; 5,3 MB em `assets/`) |
 | `node_modules` / `dist` (gerados, ignorados) | 170 MB / 13 MB |
-| Testes | 7 arquivos, 48 testes, todos verdes (`pnpm test`, ~2 s) |
+| Testes | 8 arquivos, 64 testes, todos verdes (`pnpm test`, ~3 s) |
 | Bundle (gzip) | js 1,76 MB / fontes 1,85 MB / transfer 4,26 MB — dentro do orçamento |
 
 ---
@@ -211,3 +211,101 @@ Verificação: `pnpm typecheck` limpo · `pnpm test` 48/48 · `pnpm build` ok (j
 ausência de chefe e de checkpoint, presença da fita e da laje, e que a fase não termina) ·
 captura real headless da fase 3 (67 s de simulação, sem erros de console), 8 PNGs + galeria em
 `shots/`.
+
+---
+
+## 12. Fase nova — Arsenal e Hangar (loja de armas e naves)
+
+Pedido do usuário: *"crie 5 tipos de armamento da nave em progresso, efeitos e danos diferentes,
+crie uma loja de compras para fazer upgrade das armas, crie mais 3 naves diferentes pra venda com
+pontos do jogo"*. Decisão de escopo: **progressão permanente de garagem**, paga com os pontos do
+run (não XP dentro da partida), e tudo orientado a dados para que acrescentar arma/nave seja só
+uma entrada nova.
+
+### Arquivos novos
+
+- `src/game/arsenal.ts` (443 linhas) — módulo puro (sem three/DOM) com todo o contrato da loja:
+  `WEAPON_IDS`/`SHIP_IDS`/`MAX_LEVEL`, tipos `WeaponStats`/`WeaponDef`/`ShipSpec`, `Loadout`,
+  `weaponDef`/`weaponStats`/`shipSpec`, e as funções puras `loadoutOf`/`weaponLevel`/`ownsWeapon`/
+  `ownsShip`/`nextWeaponCost`/`buyWeapon`/`buyShip`/`equipWeapon`/`equipShip`/`earn`/`rewardsFor`/
+  `shipRules`.
+- `src/game/showroom.ts` (97 linhas) — pedestal 3D do hangar (`class Showroom`), com renderer,
+  cena, câmera fov 38 e três luzes próprios; reusa `buildShip(id)` com materiais de cor de vértice
+  e re-tinge as trilhas. Expõe `show/start/stop/resize` e a flag `failed` caso um segundo contexto
+  WebGL não suba. É carregado por `import()` dinâmico em `main.ts`, então `ui.ts` continua sem three.
+- `tests/arsenal.test.ts` (256 linhas) — catálogo, curvas de nível, distinção entre as 5 armas,
+  cobertura das chaves de i18n, caminhos de compra (subir a escada até o nível 5 e parar), trocas
+  entre os cascos (`shipRules`) e o round-trip do save.
+
+### Os 5 armamentos (níveis 1–5, com preço de desbloqueio e quatro upgrades cada)
+
+| id | nome (EN) | desbloqueio | upgrades | efeito que muda por nível |
+| --- | --- | --- | --- | --- |
+| `pulse` | Pulse Driver | grátis | 1.200 / 2.600 / 5.200 / 9.000 | cadência e leque; 2º cano no nível 5 |
+| `scatter` | Scatter Cloud | 3.500 | 2.000 / 4.000 / 7.500 / 12.000 | 6→10 pelotas num cone de 0,3 rad |
+| `lance` | Lance Beam | 6.000 | 2.800 / 5.200 / 9.000 / 15.000 | perfuração 1→4 cascos |
+| `swarm` | Swarm Pods | 8.000 | 3.200 / 6.000 / 10.000 / 16.000 | 3→7 mísseis teleguiados (2,6 rad/s) |
+| `rail` | Rail Slug | 14.000 | 4.500 / 8.000 / 13.000 / 20.000 | dano 9 (+30%/nível), raio de explosão 3,7→5,7, perfuração no nível 4 |
+
+Cada arma tem som próprio (`shoot`/`shootScatter`/`shootLance`/`shootSwarm`/`shootRail`, já
+registrados em `audio-content.ts`) e um `tagKey` mostrado no HUD e no título.
+
+### As 4 naves
+
+| id | nome (EN) | preço | hull / shield / velocidade | perfil |
+| --- | --- | --- | --- | --- |
+| `heliospur` | Heliospur | grátis | 100 / 60 / 16,0 | interceptador equilibrado, o inicial |
+| `vesper` | Vesper | 12.000 | 72 / 88 / 21,5 | skirmisher rápido e frágil |
+| `bastion` | Bastion | 18.000 | 168 / 74 / 12,5 | linha pesada, o dobro de armadura e o dobro de curva |
+| `kite` | Kite | 26.000 | 92 / 118 / 18,5 | asa delta com anel de raspão largo (1,95) |
+
+Hull/shield entram nas regras do run por `shipRules(id, base)`; velocidade, aceleração,
+followRate, cooldown de rolamento, raios de acerto/raspão, offset das armas e escala do modelo
+saem direto do `ShipSpec` lido pela `Ship` — daí os quatro voarem de verdade diferente.
+
+### Economia
+
+Créditos por run = `round(pontuário × 0,2)` (`rewardsFor`), somados à carteira persistida. Comprar
+arma **já equipa** e comprar casco **já equipa** (clicar de novo num casco que já é seu também
+equipa). `buyWeapon` devolve `bought|upgraded|equipped|poor|max|unknown` e `buyShip`
+`bought|poor|max`; o `ui.ts` toca `buy` ou `denied` conforme a carteira mudou.
+
+### UI
+
+`src/ui/ui.ts` (896 linhas) ganhou a tela `hangar`: modal `screen-hangar` com carteira, abas
+armas/cascos, cartões gerados a partir do catálogo (nível em pips, barras de dano/cadência/tiros e
+de hull/shield/velocidade/raspão, preço ou ação equipar) e o pedestal 3D. Navegação por teclado
+(`data-nav` + Enter/Esc), gamepad (mesmo caminho `moveFocus` dos outros menus) e toque. Botões
+"Hangar" no título e nos resultados; no HUD, um chip com a arma equipada e o nível; nos resultados,
+a linha `results-credits` com `+N`. Toda a fala da loja está em `src/i18n/en.json` e
+`src/i18n/zh-CN.json` (147 → **195 chaves cada**), e `renderHangar()` traduz só a própria subárvore
+(chamar `translate()` ali dentro causaria recursão).
+
+`src/styles/main.css` foi de 388 para 527 linhas com o bloco do hangar.
+
+### Save
+
+`src/engine/save.ts` subiu para **v2**: `SaveData` ganhou `credits`, `weapons`,
+`weapon`, `ships`, `ship` (exatamente as chaves que `loadoutOf` lê e que `persist()` grava), com
+saneamento por `slugList()` (dedup, ≤12, `/^[a-z][a-z0-9-]{0,15}$/`) e `levelMap()` (0–9, descarta
+≤0). Saves antigos continuam caindo nos padrões — a migração não foi escrita, o que é aceitável
+porque a carteira antiga era inexistente.
+
+### Verificação
+
+`pnpm typecheck` limpo · `pnpm test` **8 arquivos / 64 testes verdes** · `pnpm build` ok ·
+`pnpm smoke` **verde nas três fases** com os seletores novos de título/resultados.
+
+Bug encontrado e corrigido no passe de browser: `Trail.setColor()` era chamado no construtor antes
+de `geometry.setAttribute('color', …)` existir, então `this.geo.getAttribute('color').needsUpdate`
+estourava e o jogo nem subia (`Launch error` na tela) — a ordem foi invertida e o acesso ficou
+guardado.
+
+Passe de browser (Chromium headless + SwiftShader, 1280×720 e zh-CN): abrir o hangar **só pelo
+teclado**; comprar `scatter` e subir até o nível 3 (carteira 250.000 → 240.500, arma equipada e
+nível 3 no jogo); comprar `kite` (→ 224.000, casco equipado, hull 92 / shield 118 / velocidade 16
+em voo); comprar `rail` pelo teclado e `bastion` por toque (→ 168 de hull, 74 de shield, 1,9 de
+raspão, projéteis `slug` no ar); run de 100.000 pontos morrendo de propósito → resultados mostram
+`CREDITS EARNED +20,000` e a carteira 0 → 20.000; zh-CN com nomes 彗星/棱堡/纸鸢, 购买 18,000 e
+已装备, comprando `vesper` (40.000 → 28.000). Sem erros de console em nenhuma passagem.
+Capturas: `shots/` (21 PNGs + `galeria.html`).

@@ -3,13 +3,15 @@
 An original 3D on-rails shooter for the browser (three.js + Rapier, TypeScript, Vite).
 Fly the SOLARWAKE interceptor through a shattered planetary ring at full burn, chain kills for a
 score multiplier, roll through bullet walls, and bring down **BOREWARDEN**, an autonomous
-deep-core mining platform, across three phases.
+deep-core mining platform, across three phases. Every run pays credits (score × 0.2) into a
+permanent garage: five weapons with four upgrades each and four flyable hulls, bought in the
+**Hangar**.
 
 ```bash
 pnpm install
 pnpm dev      # dev server
 pnpm build    # typecheck + production build + bundle budget
-pnpm test     # unit tests (rules, timeline, impact toolkit, save, i18n)
+pnpm test     # unit tests (rules, timeline, impact toolkit, save, i18n, arsenal/shop)
 pnpm smoke    # after build: headless playthrough of all three stages → screenshots in shots/
 ```
 
@@ -68,6 +70,33 @@ zero gravity, with per-channel fresnel rims and travelling caustics. The composi
 the frame empty for the HUD, and the ship's edge-only chromatic dispersion
 (`renderer.ts` → `post.aberrationEdge`) fades in with the ribbon.
 
+## The Hangar — weapons and hulls
+
+Open **Hangar** from the title or the results screen. A run's payout is `round(score × 0.2)`
+credits, saved locally; the shop spends them, and buying something equips it right away
+(clicking a hull you already own equips it too). All of it is data: `src/game/arsenal.ts` is a
+pure module holding the catalogue and the purchase rules, and the UI, the HUD and the flight
+model all read from it. Adding a weapon or a hull is one entry plus its i18n strings.
+
+| Weapon | Unlock | Upgrades (levels 2–5) | What changes per level |
+| --- | --- | --- | --- |
+| Pulse Driver `pulse` | free | 1,200 / 2,600 / 5,200 / 9,000 | Cadence and spread; a second barrel at max |
+| Scatter Cloud `scatter` | 3,500 | 2,000 / 4,000 / 7,500 / 12,000 | 6→10 pellets in a wide cone |
+| Lance Beam `lance` | 6,000 | 2,800 / 5,200 / 9,000 / 15,000 | Pierces 1→4 hulls in a line |
+| Swarm Pods `swarm` | 8,000 | 3,200 / 6,000 / 10,000 / 16,000 | 3→7 homing missiles |
+| Rail Slug `rail` | 14,000 | 4,500 / 8,000 / 13,000 / 20,000 | Damage, blast radius, pierce at max |
+
+| Hull | Price | Hull / shield / speed | Profile |
+| --- | --- | --- | --- |
+| Heliospur `heliospur` | free | 100 / 60 / 16.0 | Balanced interceptor, the one you start with |
+| Vesper `vesper` | 12,000 | 72 / 88 / 21.5 | Fast skirmisher, paper armour |
+| Bastion `bastion` | 18,000 | 168 / 74 / 12.5 | Heavy line hull: double armour, double turning circle |
+| Kite `kite` | 26,000 | 92 / 118 / 18.5 | Delta-wing with the widest graze ring |
+
+The hangar's centrepiece is a live 3D turntable (`src/game/showroom.ts`) that spins whichever hull
+is selected. Every hull also tints its own engine trails and flame, and its speed, handling, hit
+radius, graze ring and gun offset come straight from the catalogue entry.
+
 ## Layout
 
 | Path | Role |
@@ -83,6 +112,8 @@ the frame empty for the HUD, and the ship's edge-only chromatic dispersion
 | `src/engine/save.ts`, `i18n.ts` | Versioned local save + leaderboard; en / zh-CN with browser detection, saved choice wins |
 | `src/game/config.ts` | All tuning numbers (including each stage's clear bonus) |
 | `src/game/rules.ts` | Pure hull/shield/combo/score/grade rules (unit tested) |
+| `src/game/arsenal.ts` | Weapons, hulls and the shop: catalogue, level curves, purchase rules (unit tested) |
+| `src/game/showroom.ts` | Hangar turntable: its own renderer/camera/lights, reusing the ship models |
 | `src/game/stages.ts` | Stage registry: ids, themes, checkpoint labels, i18n keys, builders |
 | `src/game/director.ts` | The verb vocabulary a stage may use (spawn, banner, theme, atmosphere, clear…) |
 | `src/game/formations.ts` | Reusable formation fragments shared by every stage |
@@ -93,7 +124,7 @@ the frame empty for the HUD, and the ship's edge-only chromatic dispersion
 | `src/game/boss.ts` | BOREWARDEN: model, parts, phase timelines and attack verbs |
 | `src/game/enemies.ts`, `bullets.ts`, `fx.ts` | Pooled + instanced enemies, bullet patterns, particles |
 | `src/game/ship.ts`, `rail.ts`, `env.ts`, `models.ts` | Player ship, rail spline + camera frame, sky/asteroids/speed field, procedural low-poly models |
-| `src/ui/`, `src/styles/main.css` | HTML/CSS game UI (title, HUD, pause, settings, leaderboard, results) and touch controls |
+| `src/ui/`, `src/styles/main.css` | HTML/CSS game UI (title, hangar, HUD, pause, settings, leaderboard, results) and touch controls |
 | `src/i18n/*.json` | All player-facing text (both files, same keys) |
 
 ## Rules for changes
@@ -104,6 +135,9 @@ the frame empty for the HUD, and the ship's edge-only chromatic dispersion
 - **Pacing goes through timelines, feel goes through `Impact`.** Neither engine module knows
   about gameplay; the stages and the boss only provide verbs. A new stage is one file exporting a
   `Timeline<Director>` plus one entry in `stages.ts` — never a change to `Game`.
+- **Shop content is data.** Prices, level curves and hull stats live in `arsenal.ts` next to their
+  tests; the UI only renders what the catalogue reports, so a new weapon or hull never touches
+  `Game` or `ui.ts`.
 - **Every visible string is an i18n key** in both `en.json` and `zh-CN.json`. Chinese glyphs come
   from the subset font in `public/fonts/`; check new Chinese text renders.
 - **UI is HTML/CSS**, keyboard/gamepad navigable (`data-nav` on focusable controls).

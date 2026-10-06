@@ -122,6 +122,21 @@ export class Enemies {
     }
   }
 
+  /** Nearest live hull to `from` — the homing seeker's target. Cells (pickups) never count. */
+  nearest(from: THREE.Vector3, maxDist = 220): Enemy | undefined {
+    let best: Enemy | undefined
+    let bestD = maxDist * maxDist
+    for (const e of this.list) {
+      if (!e.active || e.kind === 'cell') continue
+      const d = e.pos.distanceToSquared(from)
+      if (d < bestD) {
+        bestD = d
+        best = e
+      }
+    }
+    return best
+  }
+
   get hostileCount(): number {
     let n = 0
     for (const e of this.list) if (e.kind === 'mite' || e.kind === 'chisel' || e.kind === 'lantern') n += 1
@@ -246,6 +261,21 @@ export class Enemies {
     e.hp = 0
     e.active = false
     e.collider.setEnabled(false)
+  }
+
+  /**
+   * Damage every hostile within `radius` (splash weapons, bombs). `skip` is left out of the blast
+   * so a direct hit is not counted twice. Returns how many hulls were damaged.
+   */
+  damageArea(center: THREE.Vector3, radius: number, damage: number, skip?: Enemy): number {
+    let n = 0
+    for (const e of this.list) {
+      if (!e.active || e.kind === 'cell' || e === skip) continue
+      if (e.pos.distanceTo(center) > radius + e.radius) continue
+      this.damage(e, damage, e.pos)
+      n += 1
+    }
+    return n
   }
 
   /** Blast every hostile within `radius` (boss death, bombs). */

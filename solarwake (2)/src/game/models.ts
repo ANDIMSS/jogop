@@ -146,6 +146,102 @@ export function buildHeliospur(): ModelParts {
   return k.build()
 }
 
+
+/**
+ * VESPER: a featherweight interceptor — a narrow needle fuselage inside an open ring tail, with
+ * two long lance booms forward and violet accents. The fastest hull in the hangar.
+ */
+export function buildVesper(): ModelParts {
+  const k = new Kit()
+  const P = PALETTE
+  // Needle fuselage.
+  k.add(cone(0.28, 2.8, 6), P.ivory, { p: [0, 0, -1.7], r: [-HALF, 0, 0] })
+  k.add(cyl(0.28, 0.4, 1.5, 6), P.steel, { p: [0, 0, 0.35], r: [HALF, 0, 0] })
+  k.add(cyl(0.4, 0.26, 0.5, 6), P.graphite, { p: [0, 0, 1.3], r: [HALF, 0, 0] })
+  // Violet dorsal fin + keel.
+  k.add(box(0.09, 0.62, 1.5), P.magenta, { p: [0, 0.42, 0.5] })
+  k.add(box(0.08, 0.34, 1.1), P.magenta, { p: [0, -0.32, 0.2] })
+  // Glass shard canopy.
+  k.add(oct(0.26), P.glass, { p: [0, 0.26, -0.75], s: [0.7, 0.55, 2.4] })
+  // Open ring tail: two arcs so the silhouette reads as a hoop with a gap.
+  k.pair(() => new THREE.TorusGeometry(1.05, 0.09, 4, 10, Math.PI * 0.72), P.steel, { p: [0, 0.02, 1.15], r: [0, 0, 0.45] })
+  k.pair(() => new THREE.TorusGeometry(1.05, 0.035, 3, 10, Math.PI * 0.72), P.cyanGlow, { p: [0, 0.02, 1.24], r: [0, 0, 0.45] }, true)
+  // Long forward booms with hot tips.
+  k.pair(() => box(0.07, 0.07, 1.9), P.graphite, { p: [0.82, -0.12, -1.05] })
+  k.pair(() => oct(0.09), P.cyanGlow, { p: [0.82, -0.12, -2.0] }, true)
+  // Swept-back winglets.
+  k.pair(() => box(1.5, 0.05, 0.42), P.ivoryShade, { p: [1.15, -0.1, 0.75], r: [0, -0.5, -0.1] })
+  // Engine bells.
+  k.pair(() => cyl(0.19, 0.24, 0.8, 6), P.graphite, { p: [0.42, -0.05, 1.5], r: [HALF, 0, 0] })
+  k.add(cyl(0.17, 0.17, 0.07, 6), P.cyanGlow, { p: [0, 0, 1.62], r: [HALF, 0, 0] }, true)
+  k.pair(() => cyl(0.17, 0.17, 0.07, 6), P.cyanGlow, { p: [0.42, -0.05, 1.92], r: [HALF, 0, 0] }, true)
+  return k.build()
+}
+
+/**
+ * BASTION: a heavy line hull — a slab fuselage with bolted armour plates, a blunt ram prow and two
+ * underslung engine blocks. Built to take hits and keep flying.
+ */
+export function buildBastion(): ModelParts {
+  const k = new Kit()
+  const P = PALETTE
+  // Slab fuselage with a blunt prow.
+  k.add(box(1.0, 0.7, 2.6), P.hull, { p: [0, 0, 0.1] })
+  k.add(box(0.78, 0.56, 0.9), P.steel, { p: [0, 0, -1.7] })
+  k.add(cone(0.46, 0.7, 4), P.ivoryShade, { p: [0, 0, -2.3], r: [-HALF, Math.PI / 4, 0] })
+  // Armour plates bolted along the flanks.
+  k.pair(() => box(0.22, 0.86, 1.9), P.graphite, { p: [0.62, 0, 0.2] })
+  k.pair(() => box(0.3, 0.34, 0.7), P.ivory, { p: [0.72, 0.42, -0.55] })
+  k.pair(() => box(0.3, 0.34, 0.7), P.ivory, { p: [0.72, -0.42, 0.75] })
+  // Hazard stripes on the prow.
+  k.pair(() => box(0.16, 0.6, 0.1), P.mining, { p: [0.42, 0, -2.0], r: [0, 0.25, 0] })
+  // Armoured canopy.
+  k.add(oct(0.34), P.glass, { p: [0, 0.42, -1.15], s: [0.85, 0.5, 1.5] })
+  // Shoulder pods.
+  k.pair(() => box(0.7, 0.42, 1.3), P.steel, { p: [1.15, 0.3, 0.35] })
+  k.pair(() => oct(0.12), P.ember, { p: [1.15, 0.3, -0.5] }, true)
+  // Underslung engine blocks.
+  k.pair(() => box(0.62, 0.62, 1.1), P.graphite, { p: [0.72, -0.5, 1.25] })
+  k.pair(() => cyl(0.24, 0.28, 0.14, 6), P.ember, { p: [0.72, -0.5, 1.86], r: [HALF, 0, 0] }, true)
+  k.add(cyl(0.24, 0.28, 0.14, 6), P.ember, { p: [0, -0.5, 1.9], r: [HALF, 0, 0] }, true)
+  // Chin guns.
+  k.pair(() => box(0.16, 0.16, 0.9), P.steel, { p: [0.5, -0.36, -1.3] })
+  return k.build()
+}
+
+/**
+ * KITE: a delta-winged skirmisher — one broad flat delta, a spine canopy, prong vanes and a wide
+ * shield-shaped tail. The largest shield in the hangar.
+ */
+export function buildKite(): ModelParts {
+  const k = new Kit()
+  const P = PALETTE
+  // Flat delta hull (a thin, wide wedge).
+  k.add(cone(1.5, 3.0, 3), P.ivory, { p: [0, 0.02, 0.3], r: [HALF, Math.PI / 2, 0], s: [1, 0.16, 1] })
+  k.add(box(0.5, 0.34, 1.5), P.steel, { p: [0, 0.16, 0.35] })
+  // Spine canopy.
+  k.add(oct(0.3), P.glass, { p: [0, 0.34, -0.5], s: [0.8, 0.6, 2.0] })
+  // Prong vanes either side of the nose.
+  k.pair(() => box(1.1, 0.06, 0.5), P.toxic, { p: [1.0, 0, -1.15], r: [0, 0.42, 0] })
+  k.pair(() => oct(0.09), P.toxic, { p: [1.5, 0, -1.6] }, true)
+  // Tail shield fin.
+  k.add(box(1.9, 0.08, 0.85), P.ivoryShade, { p: [0, 0.16, 1.25] })
+  k.add(box(0.5, 0.07, 0.5), P.graphite, { p: [0, 0.42, 1.2] })
+  // Wingtip lights and engine.
+  k.pair(() => oct(0.1), P.cyanGlow, { p: [1.42, 0, 0.35] }, true)
+  k.add(cyl(0.26, 0.32, 0.9, 6), P.graphite, { p: [0, 0.02, 1.75], r: [HALF, 0, 0] })
+  k.add(cyl(0.24, 0.24, 0.08, 6), P.cyanGlow, { p: [0, 0.02, 2.24], r: [HALF, 0, 0] }, true)
+  return k.build()
+}
+
+/** Every hangar hull by id — the shop preview and the in-game model both build through here. */
+export function buildShip(id: 'heliospur' | 'vesper' | 'bastion' | 'kite'): ModelParts {
+  if (id === 'vesper') return buildVesper()
+  if (id === 'bastion') return buildBastion()
+  if (id === 'kite') return buildKite()
+  return buildHeliospur()
+}
+
 /** MITE: a scout drone — dark core, three mining-yellow cutter legs, a single hot eye. */
 export function buildMite(): ModelParts {
   const k = new Kit()
